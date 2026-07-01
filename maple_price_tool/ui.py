@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QSpinBox,
     QTextEdit,
@@ -44,7 +45,7 @@ except Exception:  # pragma: no cover
 
 
 logger = logging.getLogger(__name__)
-PREVIEW_SIZE = QSize(360, 260)
+PREVIEW_SIZE = QSize(520, 390)
 CROP_THUMB_MAX = QSize(150, 40)
 
 
@@ -128,6 +129,40 @@ class AnalyzeImageWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class ScaledImageLabel(QLabel):
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._source_pixmap = QPixmap()
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumSize(PREVIEW_SIZE)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
+
+    def set_source_pixmap(self, pixmap: QPixmap) -> None:
+        self._source_pixmap = pixmap
+        self.setText("")
+        self._update_scaled_pixmap()
+
+    def clear_source(self, text: str = "") -> None:
+        self._source_pixmap = QPixmap()
+        self.clear()
+        self.setText(text)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API name.
+        super().resizeEvent(event)
+        self._update_scaled_pixmap()
+
+    def _update_scaled_pixmap(self) -> None:
+        if self._source_pixmap.isNull() or self.width() <= 0 or self.height() <= 0:
+            return
+        scaled = self._source_pixmap.scaled(
+            self.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.setPixmap(scaled)
+
+
 class ReviewWindow(QMainWindow):
     def __init__(self, config: AppConfig, storage: Storage) -> None:
         super().__init__()
@@ -181,22 +216,18 @@ class ReviewWindow(QMainWindow):
         file_row.addWidget(self.analyze_button)
         layout.addLayout(file_row)
 
-        self.preview_label = QLabel("No image selected")
-        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumSize(PREVIEW_SIZE)
-        self.preview_label.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
+        self.preview_label = ScaledImageLabel("No image selected")
         self.preview_scroll = QScrollArea()
-        self.preview_scroll.setWidgetResizable(False)
+        self.preview_scroll.setWidgetResizable(True)
         self.preview_scroll.setMinimumSize(PREVIEW_SIZE.width() + 18, PREVIEW_SIZE.height() + 18)
+        self.preview_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.preview_scroll.setWidget(self.preview_label)
 
-        self.diff_preview_label = QLabel("Analyze 후 diff 표시")
-        self.diff_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.diff_preview_label.setMinimumSize(PREVIEW_SIZE)
-        self.diff_preview_label.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
+        self.diff_preview_label = ScaledImageLabel("Analyze 후 diff 표시")
         self.diff_preview_scroll = QScrollArea()
-        self.diff_preview_scroll.setWidgetResizable(False)
+        self.diff_preview_scroll.setWidgetResizable(True)
         self.diff_preview_scroll.setMinimumSize(PREVIEW_SIZE.width() + 18, PREVIEW_SIZE.height() + 18)
+        self.diff_preview_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.diff_preview_scroll.setWidget(self.diff_preview_label)
 
         self.crop_list_widget = QWidget()
@@ -236,14 +267,14 @@ class ReviewWindow(QMainWindow):
         left_layout = QVBoxLayout(left_panel)
         image_row = QHBoxLayout()
         before_column = QVBoxLayout()
-        before_column.addWidget(QLabel("Before"))
+        before_column.addWidget(QLabel("Selected PNG"))
         before_column.addWidget(self.preview_scroll)
         residual_column = QVBoxLayout()
         residual_column.addWidget(QLabel("Residual"))
         residual_column.addWidget(self.diff_preview_scroll)
-        image_row.addLayout(before_column)
-        image_row.addLayout(residual_column)
-        left_layout.addLayout(image_row)
+        image_row.addLayout(before_column, 1)
+        image_row.addLayout(residual_column, 1)
+        left_layout.addLayout(image_row, 1)
         left_layout.addLayout(form)
         left_layout.addWidget(self.confidence_label)
         left_layout.addWidget(self.training_label)
@@ -351,8 +382,7 @@ class ReviewWindow(QMainWindow):
     def update_image_preview(self) -> None:
         image_path = self.selected_capture_path()
         if image_path is None:
-            self.preview_label.clear()
-            self.preview_label.setText("No image selected")
+            self.preview_label.clear_source("No image selected")
             self.preview_label.setMinimumSize(PREVIEW_SIZE)
             self.clear_diff_preview("Analyze 후 diff 표시")
             self.clear_crop_preview("Analyze 후 crop 표시")
@@ -481,23 +511,24 @@ class ReviewWindow(QMainWindow):
     def set_preview_pixmap(self, label: QLabel, image_path: Path, failure_text: str) -> None:
         pixmap = QPixmap(str(image_path))
         if pixmap.isNull():
-            label.clear()
-            label.setText(failure_text)
+            if isinstance(label, ScaledImageLabel):
+                label.clear_source(failure_text)
+            else:
+                label.clear()
+                label.setText(failure_text)
             label.setMinimumSize(PREVIEW_SIZE)
             return
-        scaled = pixmap.scaled(PREVIEW_SIZE, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        label.setPixmap(scaled)
-        label.setFixedSize(PREVIEW_SIZE)
+        if isinstance(label, ScaledImageLabel):
+            label.set_source_pixmap(pixmap)
+        else:
+            scaled = pixmap.scaled(label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            label.setPixmap(scaled)
 
     def show_before_preview_for_capture(self, image_path: Path) -> None:
-        before_path = read_before_sidecar(image_path)
-        preview_path = before_path or image_path
-        failure = "Before load failed" if before_path else "Image load failed"
-        self.set_preview_pixmap(self.preview_label, preview_path, failure)
+        self.set_preview_pixmap(self.preview_label, image_path, "Image load failed")
 
     def clear_diff_preview(self, text: str) -> None:
-        self.diff_preview_label.clear()
-        self.diff_preview_label.setText(text)
+        self.diff_preview_label.clear_source(text)
         self.diff_preview_label.setMinimumSize(PREVIEW_SIZE)
 
     def clear_crop_preview(self, text: str = "") -> None:
