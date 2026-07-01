@@ -520,7 +520,12 @@ class ReviewWindow(QMainWindow):
         if source.isNull():
             self.clear_crop_preview("source image load failed")
             return
+        previous_group = None
         for row in rows:
+            group = crop_preview_group_label(row)
+            if group != previous_group:
+                self.crop_rows_layout.addWidget(crop_preview_group_header(group))
+                previous_group = group
             self.crop_rows_layout.addWidget(self.make_crop_row_widget(source, row))
 
     def make_crop_row_widget(self, source: QPixmap, row: dict[str, object]) -> QWidget:
@@ -842,7 +847,7 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
             row["value"] = display_value_for_trace(trace)
             row["value_trace"] = trace
             row["model_trace"] = trace
-    return [rows[key] for key in sorted(rows, key=sort_preview_row_key)]
+    return sorted(rows.values(), key=sort_preview_row_key)
 
 
 def crop_row_key(trace) -> object:
@@ -908,6 +913,15 @@ def crop_row_style(row: dict[str, object]) -> str:
         background = "#ffffff"
         border = "#d0d0d0"
     return f"QWidget {{ background: {background}; border-bottom: 1px solid {border}; }} QLabel {{ border: 0; }}"
+
+
+def crop_preview_group_header(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setStyleSheet(
+        "QLabel { background: #263238; color: #ffffff; font-weight: bold; "
+        "padding: 5px 8px; border: 0; }"
+    )
+    return label
 
 
 def labeled_crop_widget(title: str, image_label: QLabel) -> QWidget:
@@ -1053,10 +1067,55 @@ def display_value_for_trace(trace) -> str:
     )
 
 
-def sort_preview_row_key(key: object) -> tuple[int, str]:
-    if isinstance(key, int):
-        return (0, f"{key:06d}")
-    return (1, str(key))
+def sort_preview_row_key(row: dict[str, object]) -> tuple[int, str, str]:
+    group_order = {
+        "req_level": 0,
+        "equipment_category": 1,
+        "price": 2,
+        "equipment_options": 3,
+        "potential": 4,
+        "other": 5,
+    }
+    group = crop_preview_group_key(row)
+    line_index = row.get("line_index")
+    if isinstance(line_index, int):
+        position = f"{line_index:06d}"
+    else:
+        position = str(row.get("sort_key") or row.get("field_name") or "")
+    return (group_order.get(group, 5), position, str(row.get("field_name") or ""))
+
+
+def crop_preview_group_key(row: dict[str, object]) -> str:
+    field_name = str(row.get("field_name") or "")
+    line_type = str(row.get("line_type") or "")
+    sort_key = str(row.get("sort_key") or "")
+    label = str(row.get("label") or "")
+    if sort_key == "req_level" or field_name in {"req_level", "req_level_label"} or line_type == "metadata_req_level":
+        return "req_level"
+    if (
+        sort_key == "metadata:equipment_category"
+        or field_name == "equipment_category"
+        or line_type == "metadata_equipment_category"
+        or label == "equipment_category"
+    ):
+        return "equipment_category"
+    if sort_key == "price" or field_name == "price" or line_type == "price":
+        return "price"
+    if line_type == "potential_option" or field_name.startswith("potential_"):
+        return "potential"
+    if line_type == "base_option" or field_name.endswith("_label") or row.get("label_trace") is not None or row.get("value_trace") is not None:
+        return "equipment_options"
+    return "other"
+
+
+def crop_preview_group_label(row: dict[str, object]) -> str:
+    return {
+        "req_level": "REQ LEV",
+        "equipment_category": "장비분류",
+        "price": "가격",
+        "equipment_options": "장비옵션",
+        "potential": "잠재능력",
+    }.get(crop_preview_group_key(row), "기타")
 
 
 def parse_optional_int(text: str) -> int:
