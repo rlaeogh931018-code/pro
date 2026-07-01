@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -33,7 +34,7 @@ from .domain import AnalysisResult, AppState, CaptureResult, Rect
 from .identity import capture_pair_id_from_path, parse_sidecar, session_id_from_pair_id, sidecar_payload
 from .storage import Storage, final_record_from_analysis
 from .vision import OpenCvTemplateRecognizer
-from recognition.training_samples import TrainingSampleWriter
+from recognition.training_samples import TrainingSampleWriter, apply_line_order_confirmations
 
 try:
     from pynput import keyboard
@@ -226,6 +227,11 @@ class ReviewWindow(QMainWindow):
         layout.addWidget(self.confidence_label)
         self.training_label = QLabel("training samples: -")
         layout.addWidget(self.training_label)
+        self.label_value_preview = QTextEdit()
+        self.label_value_preview.setReadOnly(True)
+        self.label_value_preview.setMinimumHeight(96)
+        self.label_value_preview.setPlaceholderText("Analyze 후 label/value 표시")
+        layout.addWidget(self.label_value_preview)
         self.image_label = QLabel("image: -")
         layout.addWidget(self.image_label)
 
@@ -437,6 +443,7 @@ class ReviewWindow(QMainWindow):
             f"crops: labels={option_label_crops}, values={option_value_crops}, prices={price_crops} / "
             f"methods={reasons} / needs_review={', '.join(needs_review) if needs_review else 'none'}"
         )
+        self.label_value_preview.setPlainText(format_label_value_preview(analysis))
         self.image_label.setText(f"image: {analysis.image_path}")
         self.show_diff_preview_for_capture(analysis.image_path)
 
@@ -561,6 +568,7 @@ class ReviewWindow(QMainWindow):
 
         self.set_status(AppState.IDLE, f"saved record #{record_id}{sample_message}; F7 before / F8 after")
         self.analysis = None
+        self.label_value_preview.clear()
 
     def missing_required_fields(self) -> list[str]:
         required = [
@@ -579,6 +587,7 @@ class ReviewWindow(QMainWindow):
 
     def cancel_review(self) -> None:
         self.analysis = None
+        self.label_value_preview.clear()
         self.set_status(AppState.IDLE, "cancelled; select PNG and click Analyze")
 
     def open_capture_settings(self) -> None:
@@ -648,6 +657,96 @@ def parse_required_int(text: str) -> int:
     if normalized == "" or normalized.lower() == "none":
         raise ValueError("required integer field is empty")
     return int(normalized)
+
+
+def format_label_value_preview(analysis: AnalysisResult) -> str:
+    traces = deepcopy(analysis.traces)
+    apply_line_order_confirmations(traces, analysis.editable_values())
+    rows: dict[object, dict[str, object]] = {}
+    for trace in traces:
+        if trace.field_type not in {"option_label", "option_value", "rejected"}:
+            continue
+        key = trace.line_index if trace.line_index is not None else trace.field_name
+        row = rows.setdefault(
+            key,
+            {
+                "line_index": trace.line_index,
+                "line_text": "",
+                "label": "",
+                "value": "",
+                "field_name": "",
+                "status": "ok",
+                "reason": "",
+                "notes": [],
+            },
+        )
+        metadata = trace.crop_metadata or {}
+        line_text = str(metadata.get("line_text") or metadata.get("parsed_line_text") or "")
+        if line_text and not row["line_text"]:
+            row["line_text"] = line_text
+        if not row["field_name"]:
+            row["field_name"] = trace.field_name
+        reason = str(metadata.get("rejection_reason") or trace.selection_reason or "")
+        if trace.field_type == "rejected" or reason:
+            row["status"] = "rejected"
+            row["reason"] = reason or "rejected"
+        elif trace.needs_review and row["status"] != "rejected":
+            row["status"] = "review"
+        if metadata.get("line_order_corrected"):
+            original_key = metadata.get("original_parsed_option_key")
+            original_value = metadata.get("original_parsed_value_text")
+            note_parts = []
+            if original_key:
+                note_parts.append(f"label:{original_key}")
+            if original_value:
+                note_parts.append(f"value:{original_value}")
+            if note_parts:
+                row["notes"].append("corrected from " + ", ".join(note_parts))
+        if trace.field_name.endswith("_label") or trace.field_type == "option_label":
+            row["label"] = display_label_for_trace(trace)
+        elif trace.field_type == "option_value" or trace.field_type == "rejected":
+            row["value"] = display_value_for_trace(trace)
+    if not rows:
+        return "label/value trace 없음"
+    lines = []
+    for key in sorted(rows, key=sort_preview_row_key):
+        row = rows[key]
+        prefix = f"line {row['line_index']}" if row["line_index"] is not None else str(key)
+        label = row["label"] or "-"
+        value = row["value"] or "-"
+        text = f" / text={row['line_text']}" if row["line_text"] else ""
+        reason = f" / reason={row['reason']}" if row["reason"] else ""
+        notes = f" / {'; '.join(dict.fromkeys(row['notes']))}" if row["notes"] else ""
+        lines.append(f"{prefix}: label={label} / value={value} / status={row['status']}{text}{reason}{notes}")
+    return "\n".join(lines)
+
+
+def display_label_for_trace(trace) -> str:
+    metadata = trace.crop_metadata or {}
+    return str(
+        metadata.get("confirmed_option_key")
+        or metadata.get("parsed_option_key")
+        or trace.selected_prediction
+        or trace.raw_prediction
+        or ""
+    )
+
+
+def display_value_for_trace(trace) -> str:
+    metadata = trace.crop_metadata or {}
+    return str(
+        metadata.get("confirmed_value_text")
+        or metadata.get("parsed_value_text")
+        or trace.selected_prediction
+        or trace.raw_prediction
+        or ""
+    )
+
+
+def sort_preview_row_key(key: object) -> tuple[int, str]:
+    if isinstance(key, int):
+        return (0, f"{key:06d}")
+    return (1, str(key))
 
 
 def parse_optional_int(text: str) -> int:
