@@ -44,6 +44,8 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 PREVIEW_SIZE = QSize(575, 475)
+CROP_PREVIEW_SIZE = QSize(360, 475)
+CROP_THUMB_MAX = QSize(150, 40)
 
 
 @dataclass
@@ -197,6 +199,15 @@ class ReviewWindow(QMainWindow):
         self.diff_preview_scroll.setFixedSize(PREVIEW_SIZE.width() + 18, PREVIEW_SIZE.height() + 18)
         self.diff_preview_scroll.setWidget(self.diff_preview_label)
 
+        self.crop_list_widget = QWidget()
+        self.crop_rows_layout = QVBoxLayout(self.crop_list_widget)
+        self.crop_rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.crop_preview_scroll = QScrollArea()
+        self.crop_preview_scroll.setWidgetResizable(True)
+        self.crop_preview_scroll.setFixedSize(CROP_PREVIEW_SIZE.width(), CROP_PREVIEW_SIZE.height() + 18)
+        self.crop_preview_scroll.setWidget(self.crop_list_widget)
+        self.clear_crop_preview("Analyze 후 crop 표시")
+
         preview_row = QHBoxLayout()
         original_column = QVBoxLayout()
         original_column.addWidget(QLabel("Original"))
@@ -204,8 +215,12 @@ class ReviewWindow(QMainWindow):
         diff_column = QVBoxLayout()
         diff_column.addWidget(QLabel("Analysis DIFF (matching binary)"))
         diff_column.addWidget(self.diff_preview_scroll)
+        crop_column = QVBoxLayout()
+        crop_column.addWidget(QLabel("Label / Value Crops"))
+        crop_column.addWidget(self.crop_preview_scroll)
         preview_row.addLayout(original_column)
         preview_row.addLayout(diff_column)
+        preview_row.addLayout(crop_column)
         layout.addLayout(preview_row)
 
         form = QFormLayout()
@@ -334,9 +349,11 @@ class ReviewWindow(QMainWindow):
             self.preview_label.setText("No image selected")
             self.preview_label.setMinimumSize(PREVIEW_SIZE)
             self.clear_diff_preview("Analyze 후 diff 표시")
+            self.clear_crop_preview("Analyze 후 crop 표시")
             return
         self.set_preview_pixmap(self.preview_label, image_path, "Image load failed")
         self.show_diff_preview_for_capture(image_path)
+        self.clear_crop_preview("Analyze 후 crop 표시")
 
     def start_before_capture(self) -> None:
         if self.state in {AppState.CAPTURING, AppState.ANALYZING, AppState.SAVING}:
@@ -376,6 +393,7 @@ class ReviewWindow(QMainWindow):
             QMessageBox.information(self, "No capture selected", "Select a PNG file first.")
             return
         self.set_status(AppState.ANALYZING, f"analyzing {image_path.name}")
+        self.clear_crop_preview("Analyzing...")
         self._run_worker(
             AnalyzeImageWorker(AnalyzeImageJob(self.config, image_path)),
             finished=self.on_analysis_ready,
@@ -444,6 +462,7 @@ class ReviewWindow(QMainWindow):
             f"methods={reasons} / needs_review={', '.join(needs_review) if needs_review else 'none'}"
         )
         self.label_value_preview.setPlainText(format_label_value_preview(analysis))
+        self.populate_crop_preview(analysis)
         self.image_label.setText(f"image: {analysis.image_path}")
         self.show_diff_preview_for_capture(analysis.image_path)
 
@@ -475,6 +494,44 @@ class ReviewWindow(QMainWindow):
         self.diff_preview_label.clear()
         self.diff_preview_label.setText(text)
         self.diff_preview_label.setMinimumSize(PREVIEW_SIZE)
+
+    def clear_crop_preview(self, text: str = "") -> None:
+        while self.crop_rows_layout.count():
+            item = self.crop_rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        if text:
+            label = QLabel(text)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.crop_rows_layout.addWidget(label)
+
+    def populate_crop_preview(self, analysis: AnalysisResult) -> None:
+        self.clear_crop_preview()
+        rows = label_value_crop_rows(analysis)
+        if not rows:
+            self.clear_crop_preview("label/value crop 없음")
+            return
+        source = QPixmap(str(analysis.image_path))
+        if source.isNull():
+            self.clear_crop_preview("source image load failed")
+            return
+        for row in rows:
+            self.crop_rows_layout.addWidget(self.make_crop_row_widget(source, row))
+
+    def make_crop_row_widget(self, source: QPixmap, row: dict[str, object]) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(4, 4, 4, 6)
+        title = QLabel(crop_row_title(row))
+        title.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(title)
+        crop_row = QHBoxLayout()
+        crop_row.addWidget(crop_image_label(source, row.get("label_trace"), "label crop"))
+        crop_row.addWidget(crop_image_label(source, row.get("value_trace"), "value crop"))
+        layout.addLayout(crop_row)
+        widget.setStyleSheet("QWidget { border-bottom: 1px solid #d0d0d0; } QLabel { border: 0; }")
+        return widget
 
     def show_diff_preview_for_capture(self, image_path: Path) -> None:
         diff_path = self.diff_preview_path(image_path)
@@ -588,6 +645,7 @@ class ReviewWindow(QMainWindow):
     def cancel_review(self) -> None:
         self.analysis = None
         self.label_value_preview.clear()
+        self.clear_crop_preview("Analyze 후 crop 표시")
         self.set_status(AppState.IDLE, "cancelled; select PNG and click Analyze")
 
     def open_capture_settings(self) -> None:
@@ -660,6 +718,22 @@ def parse_required_int(text: str) -> int:
 
 
 def format_label_value_preview(analysis: AnalysisResult) -> str:
+    rows = label_value_crop_rows(analysis)
+    if not rows:
+        return "label/value trace 없음"
+    lines = []
+    for row in rows:
+        prefix = f"line {row['line_index']}" if row["line_index"] is not None else str(row.get("sort_key", "trace"))
+        label = row["label"] or "-"
+        value = row["value"] or "-"
+        text = f" / text={row['line_text']}" if row["line_text"] else ""
+        reason = f" / reason={row['reason']}" if row["reason"] else ""
+        notes = f" / {'; '.join(dict.fromkeys(row['notes']))}" if row["notes"] else ""
+        lines.append(f"{prefix}: label={label} / value={value} / status={row['status']}{text}{reason}{notes}")
+    return "\n".join(lines)
+
+
+def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
     traces = deepcopy(analysis.traces)
     apply_line_order_confirmations(traces, analysis.editable_values())
     rows: dict[object, dict[str, object]] = {}
@@ -670,6 +744,7 @@ def format_label_value_preview(analysis: AnalysisResult) -> str:
         row = rows.setdefault(
             key,
             {
+                "sort_key": key,
                 "line_index": trace.line_index,
                 "line_text": "",
                 "label": "",
@@ -678,6 +753,8 @@ def format_label_value_preview(analysis: AnalysisResult) -> str:
                 "status": "ok",
                 "reason": "",
                 "notes": [],
+                "label_trace": None,
+                "value_trace": None,
             },
         )
         metadata = trace.crop_metadata or {}
@@ -704,21 +781,38 @@ def format_label_value_preview(analysis: AnalysisResult) -> str:
                 row["notes"].append("corrected from " + ", ".join(note_parts))
         if trace.field_name.endswith("_label") or trace.field_type == "option_label":
             row["label"] = display_label_for_trace(trace)
+            row["label_trace"] = trace
         elif trace.field_type == "option_value" or trace.field_type == "rejected":
             row["value"] = display_value_for_trace(trace)
-    if not rows:
-        return "label/value trace 없음"
-    lines = []
-    for key in sorted(rows, key=sort_preview_row_key):
-        row = rows[key]
-        prefix = f"line {row['line_index']}" if row["line_index"] is not None else str(key)
-        label = row["label"] or "-"
-        value = row["value"] or "-"
-        text = f" / text={row['line_text']}" if row["line_text"] else ""
-        reason = f" / reason={row['reason']}" if row["reason"] else ""
-        notes = f" / {'; '.join(dict.fromkeys(row['notes']))}" if row["notes"] else ""
-        lines.append(f"{prefix}: label={label} / value={value} / status={row['status']}{text}{reason}{notes}")
-    return "\n".join(lines)
+            row["value_trace"] = trace
+    return [rows[key] for key in sorted(rows, key=sort_preview_row_key)]
+
+
+def crop_row_title(row: dict[str, object]) -> str:
+    prefix = f"line {row['line_index']}" if row["line_index"] is not None else str(row.get("sort_key", "trace"))
+    label = row.get("label") or "-"
+    value = row.get("value") or "-"
+    status = row.get("status") or "ok"
+    reason = f" / {row['reason']}" if row.get("reason") else ""
+    return f"{prefix}  label={label}  value={value}  {status}{reason}"
+
+
+def crop_image_label(source: QPixmap, trace: object, fallback: str) -> QLabel:
+    label = QLabel()
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    label.setMinimumSize(CROP_THUMB_MAX)
+    label.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
+    rect = getattr(trace, "crop_rect", None)
+    if trace is None or rect is None or rect.width <= 0 or rect.height <= 0:
+        label.setText(fallback)
+        return label
+    crop = source.copy(rect.left, rect.top, rect.width, rect.height)
+    if crop.isNull():
+        label.setText("crop load failed")
+        return label
+    scaled = crop.scaled(CROP_THUMB_MAX, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
+    label.setPixmap(scaled)
+    return label
 
 
 def display_label_for_trace(trace) -> str:

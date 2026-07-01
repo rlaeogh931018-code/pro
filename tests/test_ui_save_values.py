@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from maple_price_tool.domain import AnalysisResult, FieldResult, RecognitionTrace, Rect
-from maple_price_tool.ui import format_label_value_preview, parse_optional_int, parse_required_int
+from maple_price_tool.ui import format_label_value_preview, label_value_crop_rows, parse_optional_int, parse_required_int
 
 
 def test_optional_numeric_fields_default_to_zero_when_blank():
@@ -84,3 +84,9 @@ def test_label_value_preview_shows_corrected_trace_mapping(tmp_path):
     assert "line 1: label=int / value=+5" in text
     assert "line 2: label=attack / value=+71" in text
     assert "corrected from label:int, value:-71" in text
+    rows = label_value_crop_rows(analysis)
+    assert len(rows) == 2
+    assert rows[0]["label_trace"] is not None
+    assert rows[0]["value_trace"] is not None
+    assert rows[1]["label"] == "attack"
+    assert rows[1]["value"] == "+71"
