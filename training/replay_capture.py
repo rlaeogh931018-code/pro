@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import tempfile
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -15,7 +15,7 @@ from maple_price_tool.storage import Storage, final_record_from_analysis
 from maple_price_tool.vision import OpenCvTemplateRecognizer
 from recognition.dataset import RecognitionJsonlDataset
 from recognition.option_classifier import default_option_class_names
-from recognition.training_samples import SampleSaveSummary, TrainingSampleWriter
+from recognition.training_samples import SampleSaveSummary, TrainingSampleWriter, semantic_validate_trace
 
 
 TASK_DIRS = {
@@ -37,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db-path", type=Path)
     parser.add_argument("--debug-dir", type=Path)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--no-save-samples", action="store_true", help="Analyze and report crop quality without writing training samples.")
     return parser
 
 
@@ -50,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         dataset_dir=args.dataset_dir,
         db_path=args.db_path,
         debug_dir=args.debug_dir,
+        save_samples=not args.no_save_samples,
     )
     text = json.dumps(report, ensure_ascii=False, indent=2, default=str)
     print(text)
@@ -68,6 +70,7 @@ def run_replay(
     dataset_dir: Path | None = None,
     db_path: Path | None = None,
     debug_dir: Path | None = None,
+    save_samples: bool = True,
 ) -> dict[str, Any]:
     temp_root = Path(tempfile.mkdtemp(prefix="maple_replay_"))
     dataset_dir = dataset_dir or temp_root / "datasets"
@@ -75,11 +78,13 @@ def run_replay(
     debug_dir = debug_dir or temp_root / "debug"
 
     config = load_config(config_path)
+    capture_fixture_input = is_capture_fixture_path(before) or is_capture_fixture_path(after)
+    effective_save_samples = bool(save_samples and not capture_fixture_input)
     config.database_path = db_path
     config.vision = replace(
         config.vision,
         save_debug_images=True,
-        save_training_samples=True,
+        save_training_samples=effective_save_samples,
         training_dataset_dir=dataset_dir,
     )
 
@@ -106,6 +111,7 @@ def run_replay(
         "db": {},
         "samples": {},
         "reload": {},
+        "crop_quality": {},
     }
     try:
         analysis = OpenCvTemplateRecognizer(config.vision, debug_dir=debug_dir).analyze(capture)
@@ -115,6 +121,7 @@ def run_replay(
             "artifact_keys": sorted(analysis.analysis_artifacts),
             "debug_images": [str(path) for path in analysis.debug_images],
         }
+        report["crop_quality"] = crop_quality_report(analysis)
     except Exception as exc:
         report["analysis"] = {"error": str(exc)}
         return report
@@ -122,8 +129,12 @@ def run_replay(
     record_id = Storage(db_path).save(final_record_from_analysis(analysis, values))
     report["db"] = {"record_id": record_id, "exists": db_path.exists()}
 
-    summary = TrainingSampleWriter(config.vision).save_confirmed_samples(analysis, values)
-    report["samples"] = sample_summary_to_dict(summary)
+    if effective_save_samples:
+        summary = TrainingSampleWriter(config.vision).save_confirmed_samples(analysis, values)
+        report["samples"] = sample_summary_to_dict(summary)
+    else:
+        reason = "capture_fixture_input" if capture_fixture_input else "disabled"
+        report["samples"] = {**sample_summary_to_dict(SampleSaveSummary()), "skipped_reason": reason}
 
     for task in ("item_metadata", "option_label", "option_value", "price"):
         metadata = dataset_dir / TASK_DIRS[task] / "samples.jsonl"
@@ -144,6 +155,72 @@ def run_replay(
     return report
 
 
+def is_capture_fixture_path(path: Path) -> bool:
+    return any(part.lower() == "captures" for part in path.resolve().parts)
+
+
+def crop_quality_report(analysis) -> dict[str, Any]:
+    rows = [trace_quality_row(trace) for trace in analysis.traces]
+    counts: dict[str, int] = {}
+    for row in rows:
+        key = str(row.get("validation_status") or row.get("field_type") or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return {
+        "trace_count": len(rows),
+        "validation_counts": counts,
+        "rows": rows,
+    }
+
+
+def trace_quality_row(trace) -> dict[str, Any]:
+    metadata = trace.crop_metadata or {}
+    field_type = trace.field_type or ""
+    label = validation_label_for_trace(trace)
+    validation_status = ""
+    validation_reason = ""
+    if field_type in {"item_metadata", "option_label", "option_value", "price"} and label:
+        validation = semantic_validate_trace(trace, field_type, label)
+        validation_status = "passed" if validation.ok else "failed"
+        validation_reason = validation.reason
+    elif field_type == "rejected" or metadata.get("rejection_reason"):
+        validation_status = "rejected"
+        validation_reason = str(metadata.get("rejection_reason") or trace.selection_reason or "rejected")
+    elif field_type in {"ignored", "ui_label", "ui_value"} or metadata.get("ui_only"):
+        validation_status = "ignored"
+        validation_reason = str(metadata.get("ignored_reason") or trace.selection_reason or "ignored")
+    return {
+        "field_name": trace.field_name,
+        "field_type": field_type,
+        "line_index": trace.line_index,
+        "line_type": metadata.get("line_type", ""),
+        "label": label,
+        "selected_prediction": trace.selected_prediction,
+        "coordinate_system": metadata.get("coordinate_system", "full_image"),
+        "validation_status": validation_status or "unvalidated",
+        "validation_reason": validation_reason,
+        "crop_rect": rect_to_dict(trace.crop_rect),
+        "raw_line_rect": metadata.get("raw_line_rect") or metadata.get("price_search_rect") or metadata.get("search_rect"),
+        "label_crop_rect": metadata.get("label_crop_rect") or metadata.get("trimmed_label_rect"),
+        "value_crop_rect": metadata.get("value_crop_rect") or metadata.get("price_tight_rect") or metadata.get("tight_rect") or metadata.get("raw_value_rect"),
+        "line_text": metadata.get("line_text") or metadata.get("raw_line_text") or metadata.get("parsed_line_text") or "",
+        "rejection_reason": metadata.get("rejection_reason", ""),
+    }
+
+
+def validation_label_for_trace(trace) -> str:
+    metadata = trace.crop_metadata or {}
+    field_type = trace.field_type or ""
+    if field_type == "item_metadata":
+        return str(metadata.get("parsed_value_text") or trace.selected_prediction or "")
+    if field_type == "option_label":
+        return str(metadata.get("parsed_option_key") or trace.selected_prediction or "")
+    if field_type == "option_value":
+        return str(metadata.get("parsed_value_text") or trace.selected_prediction or trace.raw_prediction or "")
+    if field_type == "price":
+        return str(trace.selected_prediction or trace.raw_prediction or "")
+    return ""
+
+
 def sample_summary_to_dict(summary: SampleSaveSummary) -> dict[str, Any]:
     return {
         "item_metadata_count": summary.item_metadata_count,
@@ -156,6 +233,12 @@ def sample_summary_to_dict(summary: SampleSaveSummary) -> dict[str, Any]:
         "errors": list(summary.errors),
         "saved_count": summary.saved_count,
     }
+
+
+def rect_to_dict(rect) -> dict[str, int] | None:
+    if rect is None:
+        return None
+    return {"left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom}
 
 
 if __name__ == "__main__":

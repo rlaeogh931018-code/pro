@@ -148,6 +148,39 @@ def test_replay_capture_uses_temp_paths_and_reloads_dataset(tmp_path, monkeypatc
     assert report["reload"]["option_value"]["loaded"] == 1
 
 
+def test_replay_capture_does_not_save_training_samples_from_captures_fixture(tmp_path, monkeypatch):
+    capture_dir = tmp_path / "captures"
+    before = capture_dir / "before_20260701_120000_000001.png"
+    after = capture_dir / "after_20260701_120000_000001.png"
+    write_png(before, np.zeros((80, 120, 3), dtype=np.uint8))
+    values_path = tmp_path / "confirmed.json"
+    values_path.write_text(json.dumps(confirmed_values()), encoding="utf-8")
+    dataset_dir = tmp_path / "should_not_be_training_data"
+
+    class FakeRecognizer:
+        def __init__(self, config, debug_dir=None):
+            self.config = config
+            self.debug_dir = debug_dir
+
+        def analyze(self, capture):
+            return make_analysis(tmp_path, after)
+
+    monkeypatch.setattr("training.replay_capture.OpenCvTemplateRecognizer", FakeRecognizer)
+
+    report = run_replay(
+        before=before,
+        after=after,
+        confirmed_values_path=values_path,
+        config_path="config.yaml",
+        dataset_dir=dataset_dir,
+    )
+
+    assert report["samples"]["saved_count"] == 0
+    assert report["samples"]["skipped_reason"] == "capture_fixture_input"
+    assert report["crop_quality"]["trace_count"] > 0
+    assert not (dataset_dir / "option_values" / "samples.jsonl").exists()
+
+
 def test_preview_dataset_renders_channels_and_metadata(tmp_path):
     analysis = make_analysis(tmp_path)
     from recognition.training_samples import TrainingSampleWriter
