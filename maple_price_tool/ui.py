@@ -472,10 +472,11 @@ class ReviewWindow(QMainWindow):
 
     def _set_field(self, key: str, value: object) -> None:
         widget = self.fields[key]
+        text = "" if value is None else str(value)
         if isinstance(widget, QTextEdit):
-            widget.setPlainText(str(value))
+            widget.setPlainText(text)
         else:
-            widget.setText(str(value))
+            widget.setText(text)
 
     def set_preview_pixmap(self, label: QLabel, image_path: Path, failure_text: str) -> None:
         pixmap = QPixmap(str(image_path))

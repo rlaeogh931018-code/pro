@@ -44,7 +44,7 @@ def test_tight_price_bounding_box_detects_one_row():
     result = recognizer.detect_tight_price_crop(
         image,
         Rect(0, 20, 420, 80),
-        value=1299999999,
+        value=None,
         confidence=0.9,
         raw_digits="1299999999",
         selected_row_index=0,
@@ -57,6 +57,24 @@ def test_tight_price_bounding_box_detects_one_row():
     assert result.tight_rect.width < 260
     assert result.component_count >= 8
     assert 0.005 < result.foreground_ratio < 0.75
+
+
+def test_price_value_is_rejected_when_tight_crop_digits_do_not_match():
+    recognizer = OpenCvTemplateRecognizer(VisionConfig(save_debug_images=False))
+    image = synthetic_price_image()
+    result = recognizer.detect_tight_price_crop(
+        image,
+        Rect(0, 20, 420, 80),
+        value=1299999999,
+        confidence=0.9,
+        raw_digits="1299999999",
+        selected_row_index=0,
+        selected_row_y=55,
+        detection_method="test",
+    )
+
+    assert result.rejection_reason == "price_tight_crop_value_mismatch"
+    assert result.as_tuple()[0] is None
 
 
 def test_multiple_price_rows_are_rejected():
