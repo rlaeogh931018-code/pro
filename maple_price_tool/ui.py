@@ -47,6 +47,7 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 PREVIEW_SIZE = QSize(520, 390)
 CROP_THUMB_MAX = QSize(150, 40)
+PRICE_CROP_THUMB_MAX = QSize(260, 72)
 
 
 @dataclass
@@ -592,21 +593,42 @@ class ReviewWindow(QMainWindow):
         crop_row = QHBoxLayout()
         crop_row.addWidget(
             labeled_crop_widget(
-                "search",
-                crop_image_path(row.get("price_search_roi_path"), crop_image_rect(source, row.get("raw_line_rect"), "search roi: not available")),
+                "price_search_roi",
+                crop_image_path(
+                    row.get("price_search_roi_path"),
+                    crop_image_rect(source, row.get("raw_line_rect"), "price_search_roi: not available", PRICE_CROP_THUMB_MAX),
+                    max_size=PRICE_CROP_THUMB_MAX,
+                ),
             )
         )
         crop_row.addWidget(
             labeled_crop_widget(
-                "tight",
-                crop_image_path(row.get("price_tight_crop_path"), crop_image_rect(source, row.get("value_crop_rect"), "tight crop: not available")),
+                "price_tight_crop",
+                crop_image_path(
+                    row.get("price_tight_crop_path"),
+                    crop_image_rect(source, row.get("value_crop_rect"), "price_tight_crop: not available", PRICE_CROP_THUMB_MAX),
+                    max_size=PRICE_CROP_THUMB_MAX,
+                ),
             )
         )
-        crop_row.addWidget(labeled_crop_widget("color mask", crop_image_path(row.get("price_color_mask_path"), fallback_text="color mask: not available")))
         crop_row.addWidget(
             labeled_crop_widget(
-                "component",
-                crop_image_path(row.get("price_component_mask_path"), fallback_text="component mask: not available"),
+                "price_color_mask",
+                crop_image_path(
+                    row.get("price_color_mask_path"),
+                    fallback_text="price_color_mask: not available",
+                    max_size=PRICE_CROP_THUMB_MAX,
+                ),
+            )
+        )
+        crop_row.addWidget(
+            labeled_crop_widget(
+                "price_component_mask",
+                crop_image_path(
+                    row.get("price_component_mask_path"),
+                    fallback_text="price_component_mask: not available",
+                    max_size=PRICE_CROP_THUMB_MAX,
+                ),
             )
         )
         layout.addLayout(crop_row)
@@ -1029,10 +1051,10 @@ def crop_image_label(source: QPixmap, trace: object, fallback: str) -> QLabel:
     return crop_image_rect(source, getattr(trace, "crop_rect", None), fallback)
 
 
-def crop_image_rect(source: QPixmap, rect: Rect | None, fallback: str) -> QLabel:
+def crop_image_rect(source: QPixmap, rect: Rect | None, fallback: str, max_size: QSize = CROP_THUMB_MAX) -> QLabel:
     label = QLabel()
     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    label.setMinimumSize(CROP_THUMB_MAX)
+    label.setMinimumSize(max_size)
     label.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
     if rect is None or rect.width <= 0 or rect.height <= 0:
         label.setText(fallback)
@@ -1041,26 +1063,31 @@ def crop_image_rect(source: QPixmap, rect: Rect | None, fallback: str) -> QLabel
     if crop.isNull():
         label.setText("crop load failed")
         return label
-    scaled = crop.scaled(CROP_THUMB_MAX, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
+    scaled = crop.scaled(max_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
     label.setPixmap(scaled)
     return label
 
 
-def crop_image_path(path_value: object, fallback: QLabel | None = None, fallback_text: str = "crop: not available") -> QLabel:
+def crop_image_path(
+    path_value: object,
+    fallback: QLabel | None = None,
+    fallback_text: str = "crop: not available",
+    max_size: QSize = CROP_THUMB_MAX,
+) -> QLabel:
     if path_value:
         pixmap = QPixmap(str(path_value))
         if not pixmap.isNull():
             label = QLabel()
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setMinimumSize(CROP_THUMB_MAX)
+            label.setMinimumSize(max_size)
             label.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
-            label.setPixmap(pixmap.scaled(CROP_THUMB_MAX, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation))
+            label.setPixmap(pixmap.scaled(max_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation))
             return label
     if fallback is not None:
         return fallback
     label = QLabel(fallback_text)
     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    label.setMinimumSize(CROP_THUMB_MAX)
+    label.setMinimumSize(max_size)
     label.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
     return label
 
