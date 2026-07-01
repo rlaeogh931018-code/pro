@@ -1,0 +1,45 @@
+window_title_keyword: "MapleStory Worlds"
+database_path: "ITEMDB/auction_records.sqlite3"
+log_path: "logs/app.log"
+duplicate_window_seconds: 180
+
+capture:
+  left: 50
+  right: 1100
+  up: 50
+  down: 900
+  output_dir: "captures"
+  debug_dir: "debug"
+
+vision:
+  template_dir: "templates"
+  option_threshold: 0.82
+  digit_threshold: 0.86
+  alignment_enabled: true
+  alignment_max_shift: 3.0
+  alignment_min_response: 0.20
+  ml_enabled: true
+  device: "auto"
+  model_dir: "models"
+  option_classifier_checkpoint: "models/option_classifier.pt"
+  option_classifier_pretrained: false
+  option_model_accept_threshold: 0.85
+  option_model_margin_threshold: 0.12
+  option_value_crnn_checkpoint: "models/option_value_crnn.pt"
+  price_crnn_checkpoint: "models/price_crnn.pt"
+  ctc_beam_width: 10
+  ctc_top_k: 3
+  value_model_accept_threshold: 0.80
+  value_model_margin_threshold: 0.08
+  template_fallback_enabled: true
+  save_training_samples: true
+  training_dataset_dir: "datasets"
+  save_auto_agreement_samples: false
+  save_rejected_samples: true
+  training_sample_schema_version: 1
+  enable_easyocr_fallback: false
+  easyocr_languages:
+    - ko
+    - en
+  easyocr_gpu: false
+  save_debug_images: true

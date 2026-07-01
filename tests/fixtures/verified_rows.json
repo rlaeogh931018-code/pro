@@ -1,0 +1,146 @@
+[
+  {
+    "row_index": 0,
+    "price_meso": 950000000,
+    "int_value": 5,
+    "attack": 88,
+    "magic_attack": 144,
+    "black_crystal": "",
+    "potential": "DEX +16\nMaxHP +180\nDEX +14"
+  },
+  {
+    "row_index": 1,
+    "price_meso": 499999999,
+    "int_value": 12,
+    "attack": 88,
+    "magic_attack": 153,
+    "black_crystal": "공격력, 마력 +2",
+    "potential": "보스 공격 시 데미지 +30%\n보스 공격 시 데미지 +30%\n공격 시 몬스터의 방어율 15% 무시"
+  },
+  {
+    "row_index": 2,
+    "price_meso": 480000000,
+    "int_value": 9,
+    "attack": 88,
+    "magic_attack": 147,
+    "black_crystal": "공격력, 마력 +2",
+    "potential": "보스 공격 시 데미지 +30%\n보스 공격 시 데미지 +20%\n마력 +6%"
+  },
+  {
+    "row_index": 3,
+    "price_meso": 458888888,
+    "int_value": 10,
+    "attack": 86,
+    "magic_attack": 155,
+    "black_crystal": "",
+    "potential": "공격 시 몬스터의 방어율 30% 무시\n공격 시 몬스터의 방어율 30% 무시\nSTR +6%"
+  },
+  {
+    "row_index": 4,
+    "price_meso": 455555555,
+    "int_value": 11,
+    "attack": 88,
+    "magic_attack": 150,
+    "black_crystal": "공격력, 마력 +1",
+    "potential": "마력 +9%\n공격 시 몬스터의 방어율 30% 무시\n공격 시 몬스터의 방어율 15% 무시"
+  },
+  {
+    "row_index": 5,
+    "price_meso": 450000000,
+    "int_value": 12,
+    "attack": 86,
+    "magic_attack": 148,
+    "black_crystal": "",
+    "potential": "보스 공격 시 데미지 +30%\n보스 공격 시 데미지 +30%\n공격 시 몬스터의 방어율 15% 무시"
+  },
+  {
+    "row_index": 6,
+    "price_meso": 450000000,
+    "int_value": 6,
+    "attack": 88,
+    "magic_attack": 150,
+    "black_crystal": "공격력, 마력 +2",
+    "potential": "마력 +9%\n마력 +6%\n마력 +6%"
+  },
+  {
+    "row_index": 7,
+    "price_meso": 430000000,
+    "int_value": 8,
+    "attack": 89,
+    "magic_attack": 146,
+    "black_crystal": "공격력, 마력 +2",
+    "potential": "보스 공격 시 데미지 +20%\n보스 공격 시 데미지 +30%\n마력 +6%"
+  },
+  {
+    "row_index": 0,
+    "price_meso": 422222222,
+    "int_value": 10,
+    "attack": 87,
+    "magic_attack": 149,
+    "black_crystal": "공격력, 마력 +1",
+    "potential": "보스 공격 시 데미지 +30%\n보스 공격 시 데미지 +30%\n올스탯 +3%"
+  },
+  {
+    "row_index": 1,
+    "price_meso": 385000000,
+    "int_value": 10,
+    "attack": 87,
+    "magic_attack": 149,
+    "black_crystal": "공격력, 마력 +1",
+    "potential": "보스 공격 시 데미지 +30%\n보스 공격 시 데미지 +30%\n올스탯 +3%"
+  },
+  {
+    "row_index": 2,
+    "price_meso": 320000000,
+    "int_value": 14,
+    "attack": 88,
+    "magic_attack": 152,
+    "black_crystal": "공격력, 마력 +2",
+    "potential": "보스 공격 시 데미지 +20%\n보스 공격 시 데미지 +30%\nLUK +6%"
+  },
+  {
+    "row_index": 3,
+    "price_meso": 299999999,
+    "int_value": 4,
+    "attack": 87,
+    "magic_attack": 146,
+    "black_crystal": "",
+    "potential": "보스 공격 시 데미지 +30%\n보스 공격 시 데미지 +30%\nLUK +3%"
+  },
+  {
+    "row_index": 4,
+    "price_meso": 277777777,
+    "int_value": 13,
+    "attack": 88,
+    "magic_attack": 143,
+    "black_crystal": "공격력, 마력 +2",
+    "potential": "보스 공격 시 데미지 +30%\n공격 시 몬스터의 방어율 30% 무시\n마력 +6%"
+  },
+  {
+    "row_index": 5,
+    "price_meso": 249999999,
+    "int_value": 11,
+    "attack": 89,
+    "magic_attack": 154,
+    "black_crystal": "공격력, 마력 +2",
+    "potential": "공격 시 몬스터의 방어율 30% 무시\n공격 시 몬스터의 방어율 15% 무시\nINT +6%"
+  },
+  {
+    "row_index": 6,
+    "price_meso": 244444444,
+    "int_value": 13,
+    "attack": 90,
+    "magic_attack": 150,
+    "black_crystal": "공격력, 마력 +2",
+    "potential": "보스 공격 시 데미지 +30%\n공격 시 몬스터의 방어율 30% 무시\nLUK +6%"
+  },
+  {
+    "row_index": 7,
+    "price_meso": 244444444,
+    "int_value": 11,
+    "attack": 87,
+    "magic_attack": 151,
+    "black_crystal": "공격력, 마력 +1",
+    "potential": "공격 시 몬스터의 방어율 30% 무시\n보스 공격 시 데미지 +30%\n올스탯 +3%"
+  }
+]

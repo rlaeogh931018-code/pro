@@ -1,0 +1,10 @@
+mss
+opencv-python
+pywin32
+pynput
+PySide6
+PyYAML
+pytest
+
+# Optional OCR fallback; disabled by default in config.yaml.
+# easyocr

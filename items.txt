@@ -1,0 +1,92 @@
+==== ITEM ====
+saved_at: 2026-06-29 13:45:45
+item_name: SB ou * WS Elol 3
+price: 5000000
+image_path: captures\item_20260629_134540.png
+(BE OLE: SH)
+AEAHEY: 118
+HI: ee
+ITEH EXP: 0%
+RE % REGOYNT: 355
+REG POP: 0
+REQ STR: 0
+STAOE FS 4: 0
+TEEMLEV: 1
+stats: DEX 0, LUK 120
+raw_ocr:
+SB ou * WS Elol 3)
+(Sol OO] Bt)
+
+ae} A) Wet Bt
+
+AEAHEY : 118
+REQ STR: 0
+REG DEX : 0
+Re % REGOYNT : 355
+FEB LUK : 120
+REG POP : 0
+
+TEEMLEV : 1
+ITEH EXP : 0%
+
+Of A SD RAR S= GA} oe
+
+Hl
+
+HI : ee
+
+244
+
+SINT + +3
+
+Bae 47
+
+OF +15?
+STAOE FS 4:0
+
+Fl 0
+he AIL
+alu
+
+aMsS0l s2ziO SLC.
+(Be ole: SH)
+==== ITEM ====
+saved_at: 2026-06-29 13:51:19
+item_name: “리버스 멘릴티어 (+3)
+price: 5000000
+image_path: C:/vscode/maple_project/captures/item_20260629_134300.png
+- OFS: +138
+-곰격속도: 보통
+== 인 를 OBALEV: 1
+NT BEG POP: 0
+OTA: +le
+REQ STR: 0
+SH ITEM EXP: 08
+stats: DEX 0
+raw_ocr:
+“리버스 멘릴티어 (+3)
+그 CY 인태 마미템)
+
+잠착 시 교환 불가
+cee! 디너
+
+REQ STR: 0
+BER DEX : 0
+
+nT BEG POP : 0
+== 인 를 OBALEV : 1
+
+Sh               ITEH EXP : 08
+GLH An Eh
+SHS ?말드|더
+
+-곰격속도 : 보통
+
+INA) #3. 메릴 디[|
+Baga
+
+- OFS : +138
+
+AIF 가능 횟수 ! [
+
+OTA: +le

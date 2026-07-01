@@ -1,0 +1,15 @@
+OPENAI_KEY/
+.venv/
+__pycache__/
+.pytest_cache/
+captures/
+debug/
+logs/
+datasets/
+models/
+ITEMDB/
+*.sqlite3
+*.db
+*.pt
+*.pth
+*.onnx

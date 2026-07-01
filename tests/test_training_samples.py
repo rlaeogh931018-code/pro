@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+
+from maple_price_tool.config import VisionConfig
+from maple_price_tool.domain import AnalysisResult, FieldResult, RecognitionTrace, Rect
+from recognition.dataset import RecognitionJsonlDataset, split_saved_training_image
+from recognition.preprocessing import DEFAULT_TARGET_HEIGHT, OPTION_VALUE_MAX_WIDTH, prepare_line_sample
+from recognition.training_samples import TrainingSampleWriter, normalize_training_label, parse_option_line
+
+
+def write_png(path: Path, image: np.ndarray) -> None:
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    encoded.tofile(str(path))
+
+
+def make_analysis(tmp_path: Path) -> AnalysisResult:
+    image_path = tmp_path / "after_20260701_233158_413526.png"
+    image = np.zeros((80, 120, 3), dtype=np.uint8)
+    image[10:40, 20:90] = (120, 180, 240)
+    write_png(image_path, image)
+    residual_path = tmp_path / "residual_full.png"
+    mask_path = tmp_path / "foreground_text_mask_full.png"
+    residual = np.zeros((80, 120), dtype=np.uint8)
+    residual[10:40, 20:90] = 77
+    mask = np.zeros((80, 120), dtype=np.uint8)
+    mask[10:40, 20:90] = 255
+    write_png(residual_path, residual)
+    write_png(mask_path, mask)
+    return AnalysisResult(
+        item_key="120 / 완드",
+        req_level=FieldResult(120, 0.9),
+        equipment_type=FieldResult("완드", 0.9),
+        price_meso=FieldResult(1234567, 0.9),
+        str_value=FieldResult(None, 0.0),
+        dex_value=FieldResult(0, 0.9),
+        int_value=FieldResult(3, 0.8),
+        luk_value=FieldResult(0, 0.9),
+        attack=FieldResult(0, 0.9),
+        magic_attack=FieldResult(130, 0.61),
+        upgrade_count=FieldResult(0, 0.9),
+        black_crystal=FieldResult("", 0.0),
+        equipment_options=FieldResult("", 0.0),
+        potential=FieldResult("INT +9%", 0.7),
+        image_path=image_path,
+        captured_at=datetime.now(),
+        capture_pair_id="20260701_233158_413526",
+        session_id="20260701",
+        analysis_artifacts={
+            "residual_full": residual_path,
+            "foreground_text_mask_full": mask_path,
+        },
+        traces=[
+            RecognitionTrace("magic_attack_label", field_type="option_label", line_index=3, selected_prediction="magic_attack", crop_rect=Rect(20, 10, 55, 30), confidence=0.8),
+            RecognitionTrace("magic_attack", field_type="option_value", line_index=3, selected_prediction="+138", crop_rect=Rect(55, 10, 90, 30), confidence=0.61),
+            RecognitionTrace("upgrade_count", field_type="option_value", line_index=4, selected_prediction="0", crop_rect=Rect(55, 30, 90, 45), confidence=0.9),
+            RecognitionTrace("price_meso", field_type="price", selected_prediction="1,234,567", crop_rect=Rect(20, 45, 100, 65), confidence=0.9),
+        ],
+    )
+
+
+def test_normalize_training_label_preserves_signs_and_zero():
+    assert normalize_training_label("magic_attack", 130, "option_value") == "+130"
+    assert normalize_training_label("upgrade_count", 0, "option_value") == "0"
+    assert normalize_training_label("potential_1", "+9%", "option_value") == "+9%"
+    assert normalize_training_label("status_duration", "-2", "option_value") == "-2"
+    assert normalize_training_label("price_meso", "1,299,999,999", "price") == "1,299,999,999"
+    assert normalize_training_label("int_value", None, "option_value") is None
+
+
+def test_parse_option_line():
+    assert parse_option_line("INT +9%") == {"option_key": "int", "value_text": "+9%", "full_text": "INT +9%"}
+    assert parse_option_line("잠재능력 인식 필요") is None
+
+
+def test_training_sample_writer_saves_png_jsonl_and_deduplicates(tmp_path):
+    analysis = make_analysis(tmp_path)
+    config = VisionConfig(training_dataset_dir=tmp_path / "datasets")
+    values = analysis.editable_values()
+    values["magic_attack"] = 130
+
+    first = TrainingSampleWriter(config).save_confirmed_samples(analysis, values)
+    second = TrainingSampleWriter(config).save_confirmed_samples(analysis, values)
+
+    assert first.option_label_count == 1
+    assert first.option_value_count == 2
+    assert first.price_count == 1
+    assert second.saved_count == 0
+    metadata = tmp_path / "datasets" / "option_values" / "samples.jsonl"
+    rows = [json.loads(line) for line in metadata.read_text(encoding="utf-8").splitlines()]
+    assert rows[0]["image_path"].startswith("images/")
+    assert rows[0]["capture_pair_id"] == "20260701_233158_413526"
+    assert rows[0]["channel_order"] == ["normalized_residual", "after_grayscale", "foreground_mask"]
+    assert any(row["label"] == "+130" for row in rows)
+    assert any(row["label"] == "0" for row in rows)
+
+
+def test_training_crop_uses_real_residual_channel_not_gray(tmp_path):
+    analysis = make_analysis(tmp_path)
+    config = VisionConfig(training_dataset_dir=tmp_path / "datasets")
+
+    summary = TrainingSampleWriter(config).save_confirmed_samples(analysis, analysis.editable_values())
+
+    assert summary.errors == ()
+    assert summary.option_value_count == 2
+    row = next(
+        json.loads(line)
+        for line in (tmp_path / "datasets" / "option_values" / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+        if json.loads(line)["field_name"] == "magic_attack"
+    )
+    image = cv2.imdecode(
+        np.fromfile(str(tmp_path / "datasets" / "option_values" / row["image_path"]), dtype=np.uint8),
+        cv2.IMREAD_UNCHANGED,
+    )
+    residual, gray, mask = split_saved_training_image(image)
+    assert np.all(residual == 77)
+    assert not np.array_equal(residual, gray)
+    assert np.all(mask == 255)
+
+
+def test_saved_crop_matches_dataset_preprocessing(tmp_path):
+    analysis = make_analysis(tmp_path)
+    config = VisionConfig(training_dataset_dir=tmp_path / "datasets")
+    TrainingSampleWriter(config).save_confirmed_samples(analysis, analysis.editable_values())
+    metadata = tmp_path / "datasets" / "option_values" / "samples.jsonl"
+    dataset = RecognitionJsonlDataset(metadata, task="option_value", review_statuses={"unreviewed", "approved"})
+
+    image = cv2.imdecode(np.fromfile(str(dataset.records[0].image_path), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    residual, gray, mask = split_saved_training_image(image)
+    expected = prepare_line_sample(
+        residual,
+        gray,
+        mask,
+        target_height=DEFAULT_TARGET_HEIGHT,
+        max_width=OPTION_VALUE_MAX_WIDTH,
+    ).tensor
+
+    assert np.allclose(dataset[0]["image"].numpy(), expected.numpy())
+
+
+def test_save_training_samples_false_skips(tmp_path):
+    analysis = make_analysis(tmp_path)
+    config = VisionConfig(training_dataset_dir=tmp_path / "datasets", save_training_samples=False)
+
+    summary = TrainingSampleWriter(config).save_confirmed_samples(analysis, analysis.editable_values())
+
+    assert summary.saved_count == 0
+    assert not (tmp_path / "datasets").exists()
+
+
+def test_potential_line_count_mismatch_goes_to_rejected(tmp_path):
+    analysis = make_analysis(tmp_path)
+    analysis.traces.append(
+        RecognitionTrace("potential_1", field_type="option_value", line_index=5, selected_prediction="+9%", crop_rect=Rect(20, 10, 55, 30))
+    )
+    values = analysis.editable_values()
+    values["potential"] = "INT +9%\nLUK +6%"
+    config = VisionConfig(training_dataset_dir=tmp_path / "datasets")
+
+    summary = TrainingSampleWriter(config).save_confirmed_samples(analysis, values)
+
+    assert summary.rejected_count == 1
+    assert (tmp_path / "datasets" / "rejected" / "samples.jsonl").exists()
+    row = json.loads((tmp_path / "datasets" / "rejected" / "samples.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert row["label_quality"] == "rejected"
+    assert row["review_status"] == "rejected"
+    assert row["rejection_reason"] == "manual_mapping_required"
