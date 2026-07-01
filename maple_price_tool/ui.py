@@ -738,7 +738,7 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
     apply_line_order_confirmations(traces, analysis.editable_values())
     rows: dict[object, dict[str, object]] = {}
     for trace in traces:
-        if trace.field_type not in {"option_label", "option_value", "rejected", "ui_label", "ui_value"}:
+        if trace.field_type not in {"item_metadata", "option_label", "option_value", "rejected", "ui_label", "ui_value"}:
             continue
         key = crop_row_key(trace)
         row = rows.setdefault(
@@ -779,7 +779,11 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
                 note_parts.append(f"value:{original_value}")
             if note_parts:
                 row["notes"].append("corrected from " + ", ".join(note_parts))
-        if trace.field_name.endswith("_label") or trace.field_type in {"option_label", "ui_label"}:
+        if trace.field_type == "item_metadata":
+            row["label"] = str(metadata.get("metadata_key") or trace.field_name)
+            row["value"] = display_value_for_trace(trace)
+            row["value_trace"] = trace
+        elif trace.field_name.endswith("_label") or trace.field_type in {"option_label", "ui_label"}:
             row["label"] = display_label_for_trace(trace)
             row["label_trace"] = trace
         elif trace.field_type in {"option_value", "ui_value"} or trace.field_type == "rejected":
@@ -789,6 +793,8 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
 
 
 def crop_row_key(trace) -> object:
+    if trace.field_type == "item_metadata":
+        return f"metadata:{trace.crop_metadata.get('metadata_key') or trace.field_name}"
     if trace.field_name in {"req_level", "req_level_label"}:
         return "req_level"
     return trace.line_index if trace.line_index is not None else trace.field_name
@@ -837,6 +843,7 @@ def display_value_for_trace(trace) -> str:
     return str(
         metadata.get("confirmed_value_text")
         or metadata.get("parsed_value_text")
+        or metadata.get("label")
         or trace.selected_prediction
         or trace.raw_prediction
         or ""

@@ -10,6 +10,7 @@ from maple_price_tool.config import load_config
 
 
 TASK_DIRS = {
+    "item_metadata": "item_metadata",
     "option_label": "option_labels",
     "option_value": "option_values",
     "price": "prices",

@@ -97,6 +97,7 @@ MIN_RULE_CONFIDENCE = 0.50
 
 @dataclass(frozen=True)
 class SampleSaveSummary:
+    item_metadata_count: int = 0
     option_label_count: int = 0
     option_value_count: int = 0
     price_count: int = 0
@@ -107,7 +108,13 @@ class SampleSaveSummary:
 
     @property
     def saved_count(self) -> int:
-        return self.option_label_count + self.option_value_count + self.price_count + self.rejected_count
+        return (
+            self.item_metadata_count
+            + self.option_label_count
+            + self.option_value_count
+            + self.price_count
+            + self.rejected_count
+        )
 
 
 @dataclass(frozen=True)
@@ -124,6 +131,8 @@ def normalize_training_label(field_name: str, value: Any, field_type: str) -> st
         return None
     if field_type == "price":
         return text.replace(" ", "")
+    if field_type == "item_metadata":
+        return text
     if field_name == "upgrade_count":
         return text
     if field_type == "option_value" and field_name in SCALAR_VALUE_FIELDS:
@@ -136,6 +145,8 @@ def normalize_training_label(field_name: str, value: Any, field_type: str) -> st
 def semantic_validate_trace(trace: RecognitionTrace, field_type: str, label: str) -> SemanticValidation:
     if field_type == "price":
         return SemanticValidation(True)
+    if field_type == "item_metadata":
+        return validate_item_metadata_trace(trace, label)
     metadata = trace.crop_metadata or {}
     explicit_rejection = str(metadata.get("rejection_reason") or "")
     if explicit_rejection:
@@ -149,6 +160,20 @@ def semantic_validate_trace(trace: RecognitionTrace, field_type: str, label: str
     if field_type == "option_value":
         return validate_option_value_trace(trace, label, line_text, parsed_option_key, selected_key, metadata)
     return SemanticValidation(False, "unknown_field_type")
+
+
+def validate_item_metadata_trace(trace: RecognitionTrace, label: str) -> SemanticValidation:
+    metadata = trace.crop_metadata or {}
+    metadata_key = metadata_key_for_trace(trace)
+    if metadata_key not in {"req_level", "equipment_category"}:
+        return SemanticValidation(False, "unsupported_metadata_key")
+    if metadata_key == "req_level" and not re.fullmatch(r"\d{1,3}", str(label)):
+        return SemanticValidation(False, "metadata_label_mismatch")
+    if metadata_key == "equipment_category" and not str(label).strip():
+        return SemanticValidation(False, "metadata_label_mismatch")
+    if metadata.get("line_type") not in {"metadata_req_level", "metadata_equipment_category"}:
+        return SemanticValidation(False, "metadata_line_type_mismatch")
+    return SemanticValidation(True)
 
 
 def validate_option_label_trace(
@@ -358,7 +383,7 @@ class TrainingSampleWriter:
             return SampleSaveSummary()
         errors: list[str] = []
         skipped_reasons: list[str] = []
-        counts = {"option_label": 0, "option_value": 0, "price": 0, "rejected": 0, "skipped": 0}
+        counts = {"item_metadata": 0, "option_label": 0, "option_value": 0, "price": 0, "rejected": 0, "skipped": 0}
         traces = self._confirmed_traces(analysis, final_values)
         apply_line_order_confirmations(traces, final_values)
         for trace in traces:
@@ -376,6 +401,7 @@ class TrainingSampleWriter:
                 logger.exception("failed to save training sample field=%s", trace.field_name)
                 errors.append(f"{trace.field_name}: {exc}")
         return SampleSaveSummary(
+            item_metadata_count=counts["item_metadata"],
             option_label_count=counts["option_label"],
             option_value_count=counts["option_value"],
             price_count=counts["price"],
@@ -470,6 +496,17 @@ class TrainingSampleWriter:
         return "rejected" if target == "rejected" else field_type
 
     def _confirmed_label(self, trace: RecognitionTrace, final_values: dict[str, Any], field_type: str) -> str | None:
+        if field_type == "item_metadata":
+            metadata_key = metadata_key_for_trace(trace)
+            if metadata_key == "req_level":
+                return normalize_training_label(trace.field_name, final_values.get("req_level"), field_type)
+            if metadata_key == "equipment_category":
+                return normalize_training_label(
+                    trace.field_name,
+                    final_values.get("equipment_category", final_values.get("equipment_type")),
+                    field_type,
+                )
+            return None
         if field_type == "option_label":
             if trace.field_name.startswith("potential_"):
                 parsed = parse_potential_final_line(trace, final_values)
@@ -508,6 +545,7 @@ class TrainingSampleWriter:
             "session_id": analysis.session_id,
             "field_name": trace.field_name,
             "field_type": field_type,
+            "metadata_key": metadata_key_for_trace(trace) if field_type == "item_metadata" else "",
             "original_field_type": original_field_type or field_type,
             "label": label,
             "label_quality": label_quality,
@@ -574,13 +612,32 @@ class SkipSample(Exception):
 def infer_field_type(field_name: str) -> str:
     if field_name == "price_meso":
         return "price"
+    if field_name in {"req_level", "equipment_category"}:
+        return "item_metadata"
     if field_name.endswith("_label"):
         return "option_label"
     return "option_value"
 
 
 def plural_dir_for_field_type(field_type: str) -> str:
-    return {"option_label": "option_labels", "option_value": "option_values", "price": "prices"}[field_type]
+    return {
+        "item_metadata": "item_metadata",
+        "option_label": "option_labels",
+        "option_value": "option_values",
+        "price": "prices",
+    }[field_type]
+
+
+def metadata_key_for_trace(trace: RecognitionTrace) -> str:
+    metadata = trace.crop_metadata or {}
+    key = str(metadata.get("metadata_key") or "")
+    if key:
+        return key
+    if trace.field_name in {"req_level", "equipment_category"}:
+        return trace.field_name
+    if trace.field_name == "equipment_type":
+        return "equipment_category"
+    return trace.field_name
 
 
 def sample_filename(capture_pair_id: str, line_index: int | None, field_name: str, content_hash: str) -> str:

@@ -171,3 +171,4 @@ class FinalItemRecord:
     saved_at: datetime
     capture_pair_id: str = ""
     session_id: str = ""
+    equipment_category: str = ""

@@ -123,6 +123,8 @@ def duplicate_hashes(records: list[SampleRecord]) -> set[str]:
 def validate_record(record: SampleRecord, task: str, class_names: list[str] | None, charset: str) -> None:
     if record.field_type != task:
         raise ValueError(f"field_type {record.field_type!r} does not match task {task!r}")
+    if task == "item_metadata":
+        return
     if task == "option_label":
         if class_names is None:
             raise ValueError("class_names are required for option_label datasets")

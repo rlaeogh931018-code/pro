@@ -790,6 +790,7 @@ class OpenCvTemplateRecognizer:
             debug_images=debug_images,
             traces=[
                 *self.req_level_display_traces(image, tooltip, req_level),
+                *self.item_metadata_traces(image, tooltip, req_level, equipment_type),
                 self.price_trace_from_detection(price_detection, price[0], price[1]),
             ],
             analysis_artifacts=dict(self.latest_analysis_artifacts),
@@ -820,6 +821,7 @@ class OpenCvTemplateRecognizer:
         confidences = line_analysis.confidences
         traces = list(line_analysis.traces or [])
         traces.extend(self.req_level_display_traces(image, tooltip, req_level))
+        traces.extend(self.item_metadata_traces(image, tooltip, req_level, equipment_type))
         if price_detection is not None:
             traces.append(self.price_trace_from_detection(price_detection, price_value, price[1]))
         elif price_value is not None:
@@ -1977,23 +1979,7 @@ class OpenCvTemplateRecognizer:
         template = self.label_templates.get("req_level")
         if template is None:
             return []
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        roi = crop_rect(gray, tooltip)
-        best: tuple[int, float, Rect] | None = None
-        upper_limit = tooltip.top + max(80, int(tooltip.height * 0.40))
-        for adjusted_template in scaled_label_templates(template, max(12, roi.shape[0])):
-            if roi.shape[0] < adjusted_template.shape[0] or roi.shape[1] < adjusted_template.shape[1]:
-                continue
-            result = cv2.matchTemplate(roi, adjusted_template, cv2.TM_CCOEFF_NORMED)
-            h, w = adjusted_template.shape[:2]
-            ys, xs = np.where(result >= 0.42)
-            for y, x in zip(ys, xs):
-                rect = Rect(tooltip.left + int(x), tooltip.top + int(y), tooltip.left + int(x) + w, tooltip.top + int(y) + h)
-                if rect.top > upper_limit:
-                    continue
-                score = float(result[int(y), int(x)])
-                if best is None or rect.top < best[0] or (rect.top == best[0] and score > best[1]):
-                    best = (rect.top, score, rect)
+        best = self.find_top_req_level_label_rect(image, tooltip, template)
         if best is None:
             return []
         _top, score, label_rect = best
@@ -2031,6 +2017,140 @@ class OpenCvTemplateRecognizer:
                 template_candidates=[RecognitionCandidate(value=value, score=confidence, source="template")],
             ),
         ]
+
+    def item_metadata_traces(
+        self,
+        image: np.ndarray,
+        tooltip: Rect,
+        req_level: tuple[int | None, float, str],
+        equipment_type: tuple[str | None, float, str],
+    ) -> list[RecognitionTrace]:
+        traces: list[RecognitionTrace] = []
+        traces.extend(self.req_level_metadata_traces(image, tooltip, req_level))
+        traces.extend(self.equipment_category_metadata_traces(image, tooltip, equipment_type))
+        return traces
+
+    def req_level_metadata_traces(
+        self,
+        image: np.ndarray,
+        tooltip: Rect,
+        req_level: tuple[int | None, float, str],
+    ) -> list[RecognitionTrace]:
+        value, confidence, raw_digits = req_level
+        if value is None:
+            return []
+        template = self.label_templates.get("req_level")
+        if template is None:
+            return []
+        best = self.find_top_req_level_label_rect(image, tooltip, template)
+        if best is None:
+            return []
+        _top, score, label_rect = best
+        image_bounds = Rect(0, 0, image.shape[1], image.shape[0])
+        value_rect = Rect(label_rect.right, label_rect.top - 4, label_rect.right + 95, label_rect.bottom + 4).clamp_within(image_bounds)
+        line_rect = Rect(label_rect.left, min(label_rect.top, value_rect.top), value_rect.right, max(label_rect.bottom, value_rect.bottom)).clamp_within(image_bounds)
+        metadata = {
+            "metadata_key": "req_level",
+            "line_type": "metadata_req_level",
+            "raw_line_text": f"REQ LEV : {value}",
+            "line_text": f"REQ LEV : {value}",
+            "label_crop_rect": rect_to_dict(label_rect),
+            "value_crop_rect": rect_to_dict(value_rect),
+            "parsed_value_text": str(value),
+            "raw_prediction": raw_digits,
+        }
+        return [
+            RecognitionTrace(
+                field_name="req_level",
+                field_type="item_metadata",
+                selected_prediction=str(value),
+                raw_prediction=raw_digits,
+                selection_reason="metadata_req_level",
+                confidence=min(confidence, score),
+                crop_rect=line_rect,
+                crop_metadata=metadata,
+                template_candidates=[RecognitionCandidate(value=value, score=min(confidence, score), source="template")],
+            )
+        ]
+
+    def equipment_category_metadata_traces(
+        self,
+        image: np.ndarray,
+        tooltip: Rect,
+        equipment_type: tuple[str | None, float, str],
+    ) -> list[RecognitionTrace]:
+        value, confidence, raw_value = equipment_type
+        if value in {None, "", "Unknown"}:
+            return []
+        template = self.label_templates.get("equipment_type")
+        if template is None:
+            return []
+        best = self.find_top_scaled_label_rect(image, tooltip, template, min_confidence=0.38, top_fraction=0.70)
+        if best is None:
+            return []
+        image_bounds = Rect(0, 0, image.shape[1], image.shape[0])
+        _top, score, label_rect = best
+        label_rect = label_rect.clamp_within(image_bounds)
+        value_rect = Rect(label_rect.right, label_rect.top - 6, label_rect.right + 180, label_rect.bottom + 8).clamp_within(image_bounds)
+        line_rect = Rect(label_rect.left, min(label_rect.top, value_rect.top), value_rect.right, max(label_rect.bottom, value_rect.bottom)).clamp_within(image_bounds)
+        metadata = {
+            "metadata_key": "equipment_category",
+            "line_type": "metadata_equipment_category",
+            "raw_line_text": f"장비분류 : {value}",
+            "line_text": f"장비분류 : {value}",
+            "label_crop_rect": rect_to_dict(label_rect),
+            "value_crop_rect": rect_to_dict(value_rect),
+            "parsed_value_text": str(value),
+            "raw_prediction": raw_value,
+        }
+        return [
+            RecognitionTrace(
+                field_name="equipment_category",
+                field_type="item_metadata",
+                selected_prediction=str(value),
+                raw_prediction=raw_value,
+                selection_reason="metadata_equipment_category",
+                confidence=min(confidence, score),
+                crop_rect=line_rect,
+                crop_metadata=metadata,
+                template_candidates=[RecognitionCandidate(value=value, score=min(confidence, score), source="template")],
+            )
+        ]
+
+    def find_top_req_level_label_rect(
+        self,
+        image: np.ndarray,
+        tooltip: Rect,
+        template: np.ndarray,
+    ) -> tuple[int, float, Rect] | None:
+        return self.find_top_scaled_label_rect(image, tooltip, template, min_confidence=0.42, top_fraction=0.40)
+
+    def find_top_scaled_label_rect(
+        self,
+        image: np.ndarray,
+        tooltip: Rect,
+        template: np.ndarray,
+        min_confidence: float,
+        top_fraction: float,
+    ) -> tuple[int, float, Rect] | None:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        roi = crop_rect(gray, tooltip)
+        best: tuple[int, float, Rect] | None = None
+        upper_limit = tooltip.top + max(80, int(tooltip.height * top_fraction))
+        for adjusted_template in scaled_label_templates(template, max(12, roi.shape[0])):
+            if roi.shape[0] < adjusted_template.shape[0] or roi.shape[1] < adjusted_template.shape[1]:
+                continue
+            result = cv2.matchTemplate(roi, adjusted_template, cv2.TM_CCOEFF_NORMED)
+            h, w = adjusted_template.shape[:2]
+            ys, xs = np.where(result >= min_confidence)
+            for y, x in zip(ys, xs):
+                rect = Rect(tooltip.left + int(x), tooltip.top + int(y), tooltip.left + int(x) + w, tooltip.top + int(y) + h)
+                if rect.top > upper_limit:
+                    continue
+                score = float(result[int(y), int(x)])
+                if best is None or rect.top < best[0] or (rect.top == best[0] and score > best[1]):
+                    best = (rect.top, score, rect)
+        return best
 
     def write_price_debug_images(self, image: np.ndarray, result: PriceDetectionResult) -> dict[str, Path]:
         debug_dir = self.debug_dir / "price"
@@ -2566,11 +2686,13 @@ def make_line_training_traces(
 ) -> list[RecognitionTrace]:
     key, score, local_rect = match
     field_name = f"potential_{potential_index}" if potential_index is not None else OPTION_VALUE_FIELDS.get(key, key)
+    line_type = "potential_option" if potential_index is not None else "base_option"
     label_crop = build_option_label_crop_rect(line, local_rect, text)
     label_rect = label_crop["trimmed_rect"]
     label_metadata = {
         "line_text": text,
         "parsed_line_text": text,
+        "line_type": line_type,
         "parsed_option_key": key,
         "selected_prediction": key,
         "raw_label_rect": rect_to_dict(label_crop["raw_rect"]),
@@ -2605,6 +2727,7 @@ def make_line_training_traces(
     value_metadata = {
         "line_text": text,
         "parsed_line_text": text,
+        "line_type": line_type,
         "parsed_option_key": key,
         "parsed_value_text": value_text,
         "label_rect": rect_to_dict(label_crop["trimmed_rect"]),

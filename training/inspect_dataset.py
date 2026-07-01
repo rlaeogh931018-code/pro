@@ -17,8 +17,9 @@ from recognition.option_classifier import default_option_class_names
 from recognition.training_samples import FIELD_TO_OPTION_KEY, canonical_option_key, is_non_option_line, normalize_value_text
 
 
-TASKS = ("option_label", "option_value", "price", "rejected")
+TASKS = ("item_metadata", "option_label", "option_value", "price", "rejected")
 TASK_DIRS = {
+    "item_metadata": "item_metadata",
     "option_label": "option_labels",
     "option_value": "option_values",
     "price": "prices",
@@ -85,6 +86,7 @@ def inspect_task(root: Path, task: str) -> dict:
     conflicting = conflicting_labels(rows)
     duplicate_count = len(duplicate_hashes(records))
     reason_counts = Counter(str(row.get("rejection_reason") or row.get("selection_reason") or "") for row in rows if task == "rejected")
+    metadata_key_counts = Counter(str(row.get("metadata_key") or "") for row in rows if task == "item_metadata")
     report = {
         "task": task,
         "total": len(records),
@@ -92,6 +94,7 @@ def inspect_task(root: Path, task: str) -> dict:
         "review_status_counts": dict(Counter(record.review_status for record in records)),
         "sessions": len(sessions),
         "label_counts": dict(label_counts),
+        "metadata_key_counts": dict(metadata_key_counts),
         "length_distribution": dict(Counter(len(record.label) for record in records)),
         "missing_images": sum(1 for record in records if not record.image_path.exists()),
         "duplicate_hashes": duplicate_count,
@@ -117,6 +120,14 @@ def collect_quality_issues(records: list[SampleRecord], rows: list[dict], task: 
             issues.append(f"{prefix}: missing_capture_pair_id")
         if record.field_type != task:
             issues.append(f"{prefix}: field_type_mismatch {record.field_type}!={task}")
+        if task == "item_metadata":
+            metadata_key = str(row.get("metadata_key") or "")
+            if metadata_key not in {"req_level", "equipment_category"}:
+                issues.append(f"{prefix}: unsupported_metadata_key {metadata_key}")
+            if metadata_key == "req_level" and not re.fullmatch(r"\d{1,3}", record.label):
+                issues.append(f"{prefix}: invalid_req_level {record.label}")
+            if metadata_key == "equipment_category" and not record.label.strip():
+                issues.append(f"{prefix}: empty_equipment_category")
         if task == "option_label" and record.label not in class_names:
             issues.append(f"{prefix}: unknown_option_label {record.label}")
         if charset and set(record.label) - set(charset):
@@ -307,6 +318,7 @@ def empty_report(task: str) -> dict:
         "review_status_counts": {},
         "sessions": 0,
         "label_counts": {},
+        "metadata_key_counts": {},
         "length_distribution": {},
         "missing_images": 0,
         "duplicate_hashes": 0,

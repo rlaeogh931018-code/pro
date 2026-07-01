@@ -19,6 +19,7 @@ from recognition.training_samples import SampleSaveSummary, TrainingSampleWriter
 
 
 TASK_DIRS = {
+    "item_metadata": "item_metadata",
     "option_label": "option_labels",
     "option_value": "option_values",
     "price": "prices",
@@ -124,7 +125,7 @@ def run_replay(
     summary = TrainingSampleWriter(config.vision).save_confirmed_samples(analysis, values)
     report["samples"] = sample_summary_to_dict(summary)
 
-    for task in ("option_label", "option_value", "price"):
+    for task in ("item_metadata", "option_label", "option_value", "price"):
         metadata = dataset_dir / TASK_DIRS[task] / "samples.jsonl"
         if not metadata.exists():
             report["reload"][task] = {"loaded": 0, "exists": False}
@@ -145,6 +146,7 @@ def run_replay(
 
 def sample_summary_to_dict(summary: SampleSaveSummary) -> dict[str, Any]:
     return {
+        "item_metadata_count": summary.item_metadata_count,
         "option_label_count": summary.option_label_count,
         "option_value_count": summary.option_value_count,
         "price_count": summary.price_count,

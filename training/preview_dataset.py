@@ -14,6 +14,7 @@ from recognition.dataset import split_saved_training_image
 
 
 TASK_DIRS = {
+    "item_metadata": "item_metadata",
     "option_label": "option_labels",
     "option_value": "option_values",
     "price": "prices",
@@ -149,6 +150,7 @@ def metadata_block(row: dict) -> str:
     keys = [
         "field_name",
         "field_type",
+        "metadata_key",
         "original_field_type",
         "label_quality",
         "review_status",
@@ -158,6 +160,8 @@ def metadata_block(row: dict) -> str:
         "capture_pair_id",
         "session_id",
         "line_text",
+        "raw_line_text",
+        "line_type",
         "parsed_line_text",
         "parsed_option_key",
         "parsed_value_text",
@@ -166,6 +170,8 @@ def metadata_block(row: dict) -> str:
         "was_corrected",
         "confidence",
         "crop_rect",
+        "label_crop_rect",
+        "value_crop_rect",
         "raw_label_rect",
         "trimmed_label_rect",
         "label_rect",

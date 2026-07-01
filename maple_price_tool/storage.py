@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS item_records (
     item_key TEXT NOT NULL,
     req_level INTEGER NOT NULL,
     equipment_type TEXT NOT NULL,
+    equipment_category TEXT NOT NULL DEFAULT '',
     price_meso INTEGER NOT NULL,
     str_value INTEGER NOT NULL DEFAULT 0,
     dex_value INTEGER NOT NULL DEFAULT 0,
@@ -62,6 +63,7 @@ class Storage:
         columns = {
             "str_value": "INTEGER NOT NULL DEFAULT 0",
             "dex_value": "INTEGER NOT NULL DEFAULT 0",
+            "equipment_category": "TEXT NOT NULL DEFAULT ''",
             "luk_value": "INTEGER NOT NULL DEFAULT 0",
             "attack": "INTEGER NOT NULL DEFAULT 0",
             "black_crystal": "TEXT NOT NULL DEFAULT ''",
@@ -72,23 +74,26 @@ class Storage:
         for name, definition in columns.items():
             if name not in existing:
                 conn.execute(f"ALTER TABLE item_records ADD COLUMN {name} {definition}")
+        if "equipment_category" in existing or "equipment_category" in columns:
+            conn.execute("UPDATE item_records SET equipment_category = equipment_type WHERE equipment_category = ''")
 
     def save(self, record: FinalItemRecord) -> int:
         with self.connect() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO item_records (
-                    item_key, req_level, equipment_type, price_meso, str_value,
+                    item_key, req_level, equipment_type, equipment_category, price_meso, str_value,
                     dex_value, int_value, luk_value, attack, magic_attack,
                     upgrade_count, black_crystal, equipment_options, potential, raw_values_json,
                     confidences_json, image_path, capture_pair_id, session_id, captured_at, saved_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.item_key,
                     record.req_level,
                     record.equipment_type,
+                    record.equipment_category or record.equipment_type,
                     record.price_meso,
                     record.str_value,
                     record.dex_value,
@@ -119,6 +124,7 @@ class Storage:
                 SELECT 1 FROM item_records
                 WHERE item_key = ?
                   AND price_meso = ?
+                  AND equipment_category = ?
                   AND str_value = ?
                   AND dex_value = ?
                   AND int_value = ?
@@ -135,6 +141,7 @@ class Storage:
                 (
                     record.item_key,
                     record.price_meso,
+                    record.equipment_category or record.equipment_type,
                     record.str_value,
                     record.dex_value,
                     record.int_value,
@@ -214,4 +221,5 @@ def final_record_from_analysis(analysis: AnalysisResult, values: dict[str, objec
         saved_at=datetime.now(),
         capture_pair_id=analysis.capture_pair_id,
         session_id=analysis.session_id,
+        equipment_category=equipment_type,
     )
