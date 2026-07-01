@@ -9,7 +9,13 @@ import numpy as np
 from maple_price_tool.config import VisionConfig
 from maple_price_tool.domain import Rect
 from maple_price_tool.domain import RecognitionCandidate
-from maple_price_tool.vision import OpenCvTemplateRecognizer, PriceDetectionResult, price_color_mask
+from maple_price_tool.vision import (
+    OpenCvTemplateRecognizer,
+    PriceDetectionResult,
+    auction_row_centers_for_image,
+    find_auction_table_rect,
+    price_color_mask,
+)
 from recognition.training_samples import semantic_validate_trace
 from recognition.dataset import RecognitionJsonlDataset
 from training.clean_dataset import find_flagged_rows
@@ -32,12 +38,50 @@ def synthetic_price_image(width: int = 500, second_row: bool = False) -> np.ndar
     return image
 
 
+def synthetic_auction_capture() -> np.ndarray:
+    image = np.zeros((1360, 1315, 3), dtype=np.uint8)
+    image[:] = (18, 18, 18)
+    table = Rect(376, 431, 1287, 904)
+    image[table.top : table.bottom, table.left : table.right] = (138, 94, 31)
+    row_centers = [522, 570, 616, 662, 708, 756, 802, 848]
+    prices = [
+        "430,000,000",
+        "350,000,000",
+        "240,000,000",
+        "144,444,444",
+        "139,999,999",
+        "129,999,999",
+        "122,222,222",
+        "111,111,111",
+    ]
+    for center, price in zip(row_centers, prices):
+        cv2.putText(image, price, (895, center + 7), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (80, 235, 235), 2, cv2.LINE_AA)
+        cv2.putText(image, "buy", (1230, center + 7), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (240, 240, 240), 1, cv2.LINE_AA)
+    return image
+
+
 def test_price_color_mask_uses_color_and_brightness():
     image = synthetic_price_image()
     mask = price_color_mask(image)
 
     assert mask.sum() > 0
     assert np.count_nonzero(mask) < mask.size * 0.20
+
+
+def test_auction_price_roi_uses_dynamic_row_centers_and_price_column():
+    recognizer = OpenCvTemplateRecognizer(VisionConfig(save_debug_images=False))
+    image = synthetic_auction_capture()
+
+    table = find_auction_table_rect(image)
+    centers = auction_row_centers_for_image(image)
+    search_rect = recognizer.price_search_rect(image, tooltip=None, target_y=centers[-1])
+
+    assert table == Rect(376, 431, 1287, 904)
+    assert 846 <= centers[-1] <= 854
+    assert search_rect.left == 886
+    assert search_rect.right == 1041
+    assert search_rect.top <= centers[-1] <= search_rect.bottom
+    assert search_rect.right < 1230
 
 
 def test_tight_price_bounding_box_detects_one_row():

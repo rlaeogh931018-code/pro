@@ -1854,12 +1854,15 @@ class OpenCvTemplateRecognizer:
         tooltip = find_yellow_tooltip_rect(image)
         tooltip_hand_y = find_hover_hand_y_near_tooltip(image, tooltip) if tooltip is not None else None
         hand_y = tooltip_hand_y or find_hover_hand_y(image)
+        row_centers = auction_row_centers_for_image(image)
         if hand_y is not None:
-            row_index = nearest_auction_row_index(hand_y)
-            target_y = AUCTION_ROW_CENTERS[row_index]
+            row_index, target_y = nearest_auction_row(image, hand_y, row_centers)
         else:
-            row_index = None
-            target_y = tooltip.top + 95 if tooltip else image.shape[0] // 3
+            if tooltip is not None:
+                row_index, target_y = nearest_auction_row(image, tooltip.top, row_centers)
+            else:
+                row_index = None
+                target_y = image.shape[0] // 3
         search_rect = self.price_search_rect(image, tooltip, target_y)
 
         best_value: int | None = None
@@ -1920,18 +1923,22 @@ class OpenCvTemplateRecognizer:
         return result
 
     def price_search_rect(self, image: np.ndarray, tooltip: Rect | None, target_y: int) -> Rect:
-        left = max(0, image.shape[1] - 520)
-        right = max(left, image.shape[1] - 155)
-        if right <= left:
-            right = image.shape[1]
-        if tooltip is not None and tooltip.right + 120 < image.shape[1]:
-            left = max(left, tooltip.right + 80)
-            right = min(image.shape[1], max(right, tooltip.right + 700))
+        target_y = int(np.clip(target_y, 0, max(0, image.shape[0] - 1)))
+        table = find_auction_table_rect(image)
+        if table is not None:
+            left = table.left + int(round(table.width * 0.56))
+            right = table.left + int(round(table.width * 0.73))
+        else:
+            left = max(0, image.shape[1] - 420)
+            right = max(left, image.shape[1] - 250)
         if right <= left:
             left = 0
             right = image.shape[1]
         top = max(0, target_y - 34)
         bottom = min(image.shape[0], target_y + 34)
+        if bottom <= top:
+            top = max(0, min(target_y, image.shape[0] - 1))
+            bottom = min(image.shape[0], top + 1)
         return Rect(left, top, right, bottom)
 
     def detect_tight_price_crop(
@@ -2799,6 +2806,62 @@ def find_diff_tooltip_rect(before: np.ndarray, after: np.ndarray) -> Rect | None
     return max(candidates, key=lambda item: item[0])[1]
 
 
+def find_auction_table_rect(image: np.ndarray) -> Rect | None:
+    b, g, r = cv2.split(image)
+    mask = ((b > 105) & (g > 55) & (g < 175) & (r < 90)).astype("uint8") * 255
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    candidates: list[tuple[int, Rect]] = []
+    height, width = image.shape[:2]
+    for index in range(1, count):
+        x, y, component_width, component_height, area = stats[index]
+        if component_width < width * 0.45 or component_height < height * 0.25:
+            continue
+        if area < 40_000:
+            continue
+        if x < width * 0.15 or y < height * 0.15:
+            continue
+        rect = Rect(int(x), int(y), int(x + component_width), int(y + component_height))
+        candidates.append((int(area), rect))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def auction_row_centers_for_image(image: np.ndarray) -> list[int]:
+    table = find_auction_table_rect(image)
+    if table is None:
+        return []
+    price_column = Rect(
+        table.left + int(round(table.width * 0.56)),
+        table.top + int(round(table.height * 0.12)),
+        table.left + int(round(table.width * 0.73)),
+        table.top + int(round(table.height * 0.92)),
+    ).clamp_within(Rect(0, 0, image.shape[1], image.shape[0]))
+    roi = crop_rect(image, price_column)
+    rows = price_mask_row_candidates(price_color_mask(roi))
+    centers: list[int] = []
+    min_y = table.top + int(round(table.height * 0.17))
+    max_y = table.top + int(round(table.height * 0.90))
+    for row in rows:
+        center = int(round(float(row["center_y"]) + price_column.top))
+        width = int(row["width"])
+        if center < min_y or center > max_y:
+            continue
+        if width < 35 or width > price_column.width:
+            continue
+        if not centers or abs(center - centers[-1]) > 18:
+            centers.append(center)
+        else:
+            centers[-1] = int(round((centers[-1] + center) / 2))
+    centers = sorted(dict.fromkeys(centers))
+    if len(centers) >= 4:
+        return centers
+    # Fallback for captures where price text is partly occluded: derive the eight row slots from the table body.
+    first = table.top + int(round(table.height * 0.19))
+    step = max(1, int(round(table.height * 0.098)))
+    return [first + step * index for index in range(8)]
+
+
 def find_hover_hand_y(image: np.ndarray) -> int | None:
     crop = image[:, :130]
     b, g, r = cv2.split(crop)
@@ -2846,6 +2909,14 @@ def find_hover_hand_y_near_tooltip(image: np.ndarray, tooltip: Rect | None) -> i
 
 def nearest_auction_row_index(y: int) -> int:
     return min(range(len(AUCTION_ROW_CENTERS)), key=lambda index: abs(AUCTION_ROW_CENTERS[index] - y))
+
+
+def nearest_auction_row(image: np.ndarray, y: int, centers: list[int] | None = None) -> tuple[int | None, int]:
+    row_centers = centers if centers is not None else auction_row_centers_for_image(image)
+    if row_centers:
+        index = min(range(len(row_centers)), key=lambda candidate: abs(row_centers[candidate] - y))
+        return index, int(row_centers[index])
+    return None, int(np.clip(y, 0, max(0, image.shape[0] - 1)))
 
 
 def all_potential_pattern_keys() -> list[str]:
