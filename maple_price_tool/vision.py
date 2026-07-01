@@ -2465,11 +2465,33 @@ def make_line_training_traces(
 ) -> list[RecognitionTrace]:
     key, score, local_rect = match
     field_name = f"potential_{potential_index}" if potential_index is not None else OPTION_VALUE_FIELDS.get(key, key)
-    label_rect = Rect(
-        line.rect.left + local_rect.left,
-        line.rect.top + local_rect.top,
-        line.rect.left + local_rect.right,
-        line.rect.top + local_rect.bottom,
+    label_crop = build_option_label_crop_rect(line, local_rect, text)
+    label_rect = label_crop["trimmed_rect"]
+    label_metadata = {
+        "raw_label_rect": rect_to_dict(label_crop["raw_rect"]),
+        "trimmed_label_rect": rect_to_dict(label_crop["trimmed_rect"]),
+        "label_crop_quality": label_crop["quality"],
+        **label_crop["quality"],
+    }
+    selection_reason = "line_text_bbox"
+    if label_crop["quality"]["contains_leading_bullet"]:
+        selection_reason += "_trimmed_bullet"
+    if label_crop["quality"]["rejection_reason"]:
+        selection_reason += "_needs_review"
+    label_field_type = "rejected" if label_crop["quality"]["rejection_reason"] else "option_label"
+    label_needs_review = bool(label_crop["quality"]["rejection_reason"])
+    label_candidates = [RecognitionCandidate(value=key, score=score, source="template")]
+    label_trace = RecognitionTrace(
+        field_name=f"{field_name}_label",
+        field_type=label_field_type,
+        line_index=line_index,
+        selected_prediction=key,
+        selection_reason=selection_reason,
+        confidence=score,
+        needs_review=label_needs_review,
+        crop_rect=label_rect,
+        crop_metadata=label_metadata,
+        template_candidates=label_candidates,
     )
     value_rect = Rect(
         min(line.rect.right, line.rect.left + local_rect.right),
@@ -2480,16 +2502,7 @@ def make_line_training_traces(
     label_value = key
     value_text = extract_value_text(text)
     return [
-        RecognitionTrace(
-            field_name=f"{field_name}_label",
-            field_type="option_label",
-            line_index=line_index,
-            selected_prediction=label_value,
-            selection_reason="template_only",
-            confidence=score,
-            crop_rect=label_rect,
-            template_candidates=[RecognitionCandidate(value=label_value, score=score, source="template")],
-        ),
+        label_trace,
         RecognitionTrace(
             field_name=field_name,
             field_type="option_value",
@@ -2509,6 +2522,135 @@ def extract_value_text(text: str) -> str:
         if any(char.isdigit() for char in token):
             return token
     return str(text)
+
+
+def build_option_label_crop_rect(line: TooltipLine, local_rect: Rect, text: str) -> dict[str, object]:
+    mask = maple_text_mask(line.image)
+    text_bbox = mask_bbox(mask) or Rect(0, 0, line.image.shape[1], line.image.shape[0])
+    spans = column_word_spans(mask)
+    value_text = extract_value_text(text)
+    value_start = find_value_start(spans, text_bbox, value_text)
+    label_padding_left = 4
+    label_padding_right = 4
+    label_padding_y = 3
+    raw_left = max(0, text_bbox.left - label_padding_left)
+    raw_top = max(0, text_bbox.top - label_padding_y)
+    raw_right = min(line.image.shape[1], max(raw_left + 1, value_start - label_padding_right))
+    raw_bottom = min(line.image.shape[0], text_bbox.bottom + label_padding_y)
+    raw_rect = Rect(line.rect.left + raw_left, line.rect.top + raw_top, line.rect.left + raw_right, line.rect.top + raw_bottom)
+
+    trim_left = raw_left
+    trim_right = raw_right
+    contains_bullet = False
+    if spans and spans[0][0] < raw_right:
+        first_left, first_right = spans[0]
+        first_mask = mask[:, first_left:first_right]
+        first_width = first_right - first_left
+        first_area = int(np.count_nonzero(first_mask))
+        if first_width <= 7 and first_area <= 36 and len(spans) >= 2:
+            trim_left = max(trim_left, spans[1][0] - 1)
+            contains_bullet = True
+    label_spans = [(left, right) for left, right in spans if left >= trim_left and right <= raw_right]
+    if label_spans:
+        last_left, last_right = label_spans[-1]
+        last_mask = mask[:, last_left:last_right]
+        if last_right - last_left <= 5 and int(np.count_nonzero(last_mask)) <= 28 and len(label_spans) >= 2:
+            trim_right = min(trim_right, max(trim_left + 1, last_left - 1))
+    trimmed_rect = Rect(
+        line.rect.left + trim_left,
+        line.rect.top + raw_top,
+        line.rect.left + max(trim_left + 1, trim_right),
+        line.rect.top + raw_bottom,
+    )
+    quality = option_label_crop_quality(
+        mask,
+        Rect(trim_left, raw_top, max(trim_left + 1, trim_right), raw_bottom),
+        value_start=value_start,
+        contains_bullet=contains_bullet,
+    )
+    quality["template_rect"] = rect_to_dict(
+        Rect(
+            line.rect.left + local_rect.left,
+            line.rect.top + local_rect.top,
+            line.rect.left + local_rect.right,
+            line.rect.top + local_rect.bottom,
+        )
+    )
+    return {"raw_rect": raw_rect, "trimmed_rect": trimmed_rect, "quality": quality}
+
+
+def mask_bbox(mask: np.ndarray) -> Rect | None:
+    if mask.size == 0:
+        return None
+    rows = np.where((mask > 0).sum(axis=1) > 0)[0]
+    cols = np.where((mask > 0).sum(axis=0) > 0)[0]
+    if len(rows) == 0 or len(cols) == 0:
+        return None
+    return Rect(int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
+
+
+def column_word_spans(mask: np.ndarray, gap_threshold: int = 5) -> list[tuple[int, int]]:
+    cols = np.where((mask > 0).sum(axis=0) > 0)[0]
+    if len(cols) == 0:
+        return []
+    spans: list[tuple[int, int]] = []
+    start = int(cols[0])
+    previous = int(cols[0])
+    for col_value in cols[1:]:
+        col = int(col_value)
+        if col - previous > gap_threshold:
+            spans.append((start, previous + 1))
+            start = col
+        previous = col
+    spans.append((start, previous + 1))
+    return spans
+
+
+def find_value_start(spans: list[tuple[int, int]], text_bbox: Rect, value_text: str) -> int:
+    if len(spans) >= 2 and any(char.isdigit() for char in value_text):
+        return spans[-1][0]
+    return text_bbox.right
+
+
+def option_label_crop_quality(mask: np.ndarray, rect: Rect, value_start: int, contains_bullet: bool) -> dict[str, object]:
+    crop_mask = mask[rect.top : rect.bottom, rect.left : rect.right]
+    foreground = crop_mask > 0
+    touches_left = bool(foreground[:, :1].any()) if foreground.size else False
+    touches_right = bool(foreground[:, -1:].any()) if foreground.size else False
+    touches_top = bool(foreground[:1, :].any()) if foreground.size else False
+    touches_bottom = bool(foreground[-1:, :].any()) if foreground.size else False
+    foreground_ratio = float(np.count_nonzero(foreground)) / float(foreground.size) if foreground.size else 0.0
+    contains_value_like_text = rect.right > value_start
+    crop_width = rect.width
+    crop_height = rect.height
+    rejection_reason = ""
+    if crop_width < 12 or crop_height < 8:
+        rejection_reason = "label_crop_too_tight"
+    elif touches_left or touches_right or touches_top or touches_bottom:
+        rejection_reason = "label_crop_clipped"
+    elif contains_value_like_text:
+        rejection_reason = "label_contains_value"
+    elif foreground_ratio <= 0.005:
+        rejection_reason = "label_crop_too_tight"
+    score = 1.0
+    if rejection_reason:
+        score = 0.25
+    elif contains_bullet:
+        score = 0.80
+    return {
+        "crop_width": crop_width,
+        "crop_height": crop_height,
+        "foreground_ratio": foreground_ratio,
+        "touches_left_edge": touches_left,
+        "touches_right_edge": touches_right,
+        "touches_top_edge": touches_top,
+        "touches_bottom_edge": touches_bottom,
+        "was_truncated_by_max_width": False,
+        "contains_value_like_text": contains_value_like_text,
+        "contains_leading_bullet": contains_bullet,
+        "crop_quality_score": score,
+        "rejection_reason": rejection_reason,
+    }
 
 
 def maple_text_mask(crop: np.ndarray) -> np.ndarray:

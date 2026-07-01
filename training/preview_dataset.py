@@ -58,20 +58,35 @@ def render_preview(metadata: Path, task: str, limit: int = 100) -> str:
             cells.append("<td colspan='4' class='missing'>missing image</td>")
         else:
             residual, gray, mask = split_saved_training_image(image)
-            cells.append(f"<td>{img_tag(image)}</td>")
-            cells.append(f"<td>{img_tag(residual)}</td>")
-            cells.append(f"<td>{img_tag(gray)}</td>")
-            cells.append(f"<td>{img_tag(mask)}</td>")
+            if task == "option_label":
+                raw_crop = source_rect_crop(row, "raw_label_rect")
+                trimmed_crop = source_rect_crop(row, "trimmed_label_rect")
+                cells.append(f"<td>{img_tag(raw_crop) if raw_crop is not None else ''}</td>")
+                cells.append(f"<td>{img_tag(trimmed_crop) if trimmed_crop is not None else ''}</td>")
+                cells.append(f"<td>{img_tag(model_input_preview(image, 256))}</td>")
+                cells.append(f"<td>{img_tag(image)}</td>")
+                cells.append(f"<td>{img_tag(mask)}</td>")
+            else:
+                cells.append(f"<td>{img_tag(image)}</td>")
+                cells.append(f"<td>{img_tag(residual)}</td>")
+                cells.append(f"<td>{img_tag(gray)}</td>")
+                cells.append(f"<td>{img_tag(mask)}</td>")
         metadata_html = metadata_block(row)
+        row_class = "bad" if row.get("rejection_reason") else ""
         body.append(
-            "<tr>"
+            f"<tr class='{row_class}'>"
             f"<th>{index}</th>"
             f"<td class='label'>{html.escape(str(row.get('label', '')))}</td>"
             + "".join(cells)
             + f"<td class='meta'>{metadata_html}</td>"
             "</tr>"
         )
-    return HTML_TEMPLATE.format(task=html.escape(task), rows="\n".join(body))
+    headers = (
+        "<th>Raw</th><th>Trimmed</th><th>Model</th><th>Composite</th><th>Mask</th>"
+        if task == "option_label"
+        else "<th>Composite</th><th>Residual</th><th>Gray</th><th>Mask</th>"
+    )
+    return HTML_TEMPLATE.format(task=html.escape(task), headers=headers, rows="\n".join(body))
 
 
 def read_rows(metadata: Path) -> list[dict]:
@@ -94,6 +109,42 @@ def img_tag(image: np.ndarray) -> str:
     return f"<img src='data:image/png;base64,{data}' alt='sample'>"
 
 
+def source_rect_crop(row: dict, rect_key: str) -> np.ndarray | None:
+    source_text = str(row.get("source_image_path", "")).strip()
+    rect = row.get(rect_key)
+    if not source_text or not isinstance(rect, dict):
+        return None
+    source_path = Path(source_text)
+    if not source_path.exists():
+        return None
+    image = cv2.imdecode(np.fromfile(str(source_path), dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        return None
+    left = max(0, int(rect.get("left", 0)))
+    top = max(0, int(rect.get("top", 0)))
+    right = min(image.shape[1], int(rect.get("right", 0)))
+    bottom = min(image.shape[0], int(rect.get("bottom", 0)))
+    if right <= left or bottom <= top:
+        return None
+    return image[top:bottom, left:right]
+
+
+def model_input_preview(image: np.ndarray, max_width: int) -> np.ndarray:
+    if image.size == 0:
+        return image
+    target_height = 32
+    scale = target_height / float(image.shape[0])
+    resized_width = max(1, min(max_width, int(round(image.shape[1] * scale))))
+    resized = cv2.resize(image, (resized_width, target_height), interpolation=cv2.INTER_AREA)
+    padded = np.zeros((target_height, max_width, image.shape[2] if image.ndim == 3 else 1), dtype=image.dtype)
+    if image.ndim == 2:
+        padded = padded[:, :, 0]
+        padded[:, :resized_width] = resized
+    else:
+        padded[:, :resized_width, :] = resized
+    return padded
+
+
 def metadata_block(row: dict) -> str:
     keys = [
         "field_name",
@@ -107,6 +158,15 @@ def metadata_block(row: dict) -> str:
         "was_corrected",
         "confidence",
         "crop_rect",
+        "raw_label_rect",
+        "trimmed_label_rect",
+        "crop_quality_score",
+        "touches_left_edge",
+        "touches_right_edge",
+        "touches_top_edge",
+        "touches_bottom_edge",
+        "contains_leading_bullet",
+        "contains_value_like_text",
         "source_image_path",
         "rejection_reason",
     ]
@@ -133,12 +193,13 @@ img {{ image-rendering: pixelated; max-width: 220px; max-height: 72px; backgroun
 .label {{ font-weight: 700; white-space: nowrap; }}
 .meta {{ font-size: 12px; line-height: 1.45; }}
 .missing {{ color: #b00020; }}
+.bad {{ background: #fff3f3; }}
 </style>
 </head>
 <body>
 <h1>{task}</h1>
 <table>
-<thead><tr><th>#</th><th>Label</th><th>Composite</th><th>Residual</th><th>Gray</th><th>Mask</th><th>Metadata</th></tr></thead>
+<thead><tr><th>#</th><th>Label</th>{headers}<th>Metadata</th></tr></thead>
 <tbody>
 {rows}
 </tbody>
