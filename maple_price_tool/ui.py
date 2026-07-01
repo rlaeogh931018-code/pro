@@ -212,28 +212,12 @@ class ReviewWindow(QMainWindow):
             "req_level": QLineEdit(),
             "equipment_type": QLineEdit(),
             "price_meso": QLineEdit(),
-            "str_value": QLineEdit(),
-            "dex_value": QLineEdit(),
-            "int_value": QLineEdit(),
-            "luk_value": QLineEdit(),
-            "attack": QLineEdit(),
-            "magic_attack": QLineEdit(),
-            "upgrade_count": QLineEdit(),
-            "black_crystal": QLineEdit(),
             "equipment_options": QTextEdit(),
             "potential": QTextEdit(),
         }
         form.addRow("REQ LEV", self.fields["req_level"])
         form.addRow("장비분류", self.fields["equipment_type"])
         form.addRow("가격(메소)", self.fields["price_meso"])
-        form.addRow("STR", self.fields["str_value"])
-        form.addRow("DEX", self.fields["dex_value"])
-        form.addRow("INT", self.fields["int_value"])
-        form.addRow("LUK", self.fields["luk_value"])
-        form.addRow("공격력", self.fields["attack"])
-        form.addRow("마력", self.fields["magic_attack"])
-        form.addRow("업그레이드 가능 횟수", self.fields["upgrade_count"])
-        form.addRow("흑수정 강화", self.fields["black_crystal"])
         form.addRow("장비옵션", self.fields["equipment_options"])
         form.addRow("잠재능력", self.fields["potential"])
         layout.addLayout(form)
@@ -436,23 +420,11 @@ class ReviewWindow(QMainWindow):
         self._set_field("req_level", analysis.req_level.value)
         self._set_field("equipment_type", analysis.equipment_type.value)
         self._set_field("price_meso", analysis.price_meso.value)
-        self._set_field("str_value", analysis.str_value.value)
-        self._set_field("dex_value", analysis.dex_value.value)
-        self._set_field("int_value", analysis.int_value.value)
-        self._set_field("luk_value", analysis.luk_value.value)
-        self._set_field("attack", analysis.attack.value)
-        self._set_field("magic_attack", analysis.magic_attack.value)
-        self._set_field("upgrade_count", analysis.upgrade_count.value)
-        self._set_field("black_crystal", analysis.black_crystal.value)
         self._set_field("equipment_options", analysis.equipment_options.value)
         self._set_field("potential", analysis.potential.value)
         self.confidence_label.setText(
             "recognizer: opencv-template / confidence: "
             f"price={analysis.price_meso.confidence:.2f}, "
-            f"int={analysis.int_value.confidence:.2f}, "
-            f"atk={analysis.attack.confidence:.2f}, "
-            f"magic={analysis.magic_attack.confidence:.2f}, "
-            f"black={analysis.black_crystal.confidence:.2f}, "
             f"options={analysis.equipment_options.confidence:.2f}, "
             f"potential={analysis.potential.confidence:.2f}"
         )
@@ -524,14 +496,14 @@ class ReviewWindow(QMainWindow):
             "req_level": parse_required_int(self._field_value("req_level")),
             "equipment_type": self._field_value("equipment_type").strip(),
             "price_meso": parse_required_int(self._field_value("price_meso")),
-            "str_value": parse_optional_int(self._field_value("str_value")),
-            "dex_value": parse_optional_int(self._field_value("dex_value")),
-            "int_value": parse_optional_int(self._field_value("int_value")),
-            "luk_value": parse_optional_int(self._field_value("luk_value")),
-            "attack": parse_optional_int(self._field_value("attack")),
-            "magic_attack": parse_optional_int(self._field_value("magic_attack")),
-            "upgrade_count": parse_optional_int(self._field_value("upgrade_count")),
-            "black_crystal": self._field_value("black_crystal").strip(),
+            "str_value": 0,
+            "dex_value": 0,
+            "int_value": 0,
+            "luk_value": 0,
+            "attack": 0,
+            "magic_attack": 0,
+            "upgrade_count": 0,
+            "black_crystal": "",
             "equipment_options": self._field_value("equipment_options").strip(),
             "potential": self._field_value("potential").strip(),
         }
@@ -595,6 +567,7 @@ class ReviewWindow(QMainWindow):
             "req_level",
             "equipment_type",
             "price_meso",
+            "equipment_options",
             "potential",
         ]
         missing = []

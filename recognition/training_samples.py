@@ -31,6 +31,15 @@ SCALAR_VALUE_FIELDS = {
     "magic_attack",
     "upgrade_count",
 }
+FIELD_TO_OPTION_KEY = {
+    "str_value": "str",
+    "dex_value": "dex",
+    "int_value": "int",
+    "luk_value": "luk",
+    "attack": "attack",
+    "magic_attack": "magic_attack",
+    "upgrade_count": "upgrade_count",
+}
 
 
 @dataclass(frozen=True)
@@ -70,19 +79,40 @@ def split_user_lines(text: Any) -> list[str]:
 
 
 def parse_option_line(text: str) -> dict[str, str] | None:
-    parts = text.strip().split()
+    normalized = text.strip().replace(":", " ")
+    parts = normalized.split()
     if len(parts) < 2:
         return None
     value_text = parts[-1]
     if not any(char.isdigit() for char in value_text):
         return None
-    option_key = parts[0].lower()
-    aliases = {"올스탯": "all_stat", "마력": "magic_attack", "공격력": "attack"}
+    option_key = canonical_option_key(" ".join(parts[:-1]))
     return {
-        "option_key": aliases.get(option_key, option_key),
+        "option_key": option_key,
         "value_text": value_text,
         "full_text": text.strip(),
     }
+
+
+def canonical_option_key(text: str) -> str:
+    compact = text.strip().lower().replace(" ", "")
+    aliases = {
+        "str": "str",
+        "dex": "dex",
+        "int": "int",
+        "luk": "luk",
+        "올스탯": "all_stat",
+        "allstat": "all_stat",
+        "공격력": "attack",
+        "attack": "attack",
+        "마력": "magic_attack",
+        "magicattack": "magic_attack",
+        "업그레이드가능횟수": "upgrade_count",
+        "업그레이드가능": "upgrade_count",
+        "upgradecount": "upgrade_count",
+        "업횟": "upgrade_count",
+    }
+    return aliases.get(compact, compact)
 
 
 def parse_potential_final_line(trace: RecognitionTrace, final_values: dict[str, Any]) -> dict[str, str] | None:
@@ -97,6 +127,22 @@ def parse_potential_final_line(trace: RecognitionTrace, final_values: dict[str, 
     if line_index < 0 or line_index >= len(lines):
         return None
     return parse_option_line(lines[line_index])
+
+
+def parse_equipment_final_line(trace: RecognitionTrace, final_values: dict[str, Any]) -> dict[str, str] | None:
+    lines = split_user_lines(final_values.get("equipment_options", ""))
+    if not lines:
+        return None
+    target_key = FIELD_TO_OPTION_KEY.get(trace.field_name, trace.field_name)
+    parsed_lines = [parsed for line in lines if (parsed := parse_option_line(line)) is not None]
+    for parsed in parsed_lines:
+        if parsed["option_key"] == target_key:
+            return parsed
+    selected_key = canonical_option_key(str(trace.selected_prediction or trace.field_name))
+    for parsed in parsed_lines:
+        if parsed["option_key"] == selected_key:
+            return parsed
+    return None
 
 
 class TrainingSampleWriter:
@@ -203,10 +249,16 @@ class TrainingSampleWriter:
             if trace.field_name.startswith("potential_"):
                 parsed = parse_potential_final_line(trace, final_values)
                 return parsed.get("option_key") if parsed else None
+            parsed = parse_equipment_final_line(trace, final_values)
+            if parsed:
+                return parsed.get("option_key")
             return str(trace.selected_prediction or "").strip() or None
         if trace.field_name.startswith("potential_"):
             parsed = parse_potential_final_line(trace, final_values)
             return parsed.get("value_text") if parsed else None
+        parsed = parse_equipment_final_line(trace, final_values)
+        if parsed:
+            return parsed.get("value_text")
         return normalize_training_label(trace.field_name, final_values.get(trace.field_name), field_type)
 
     def _metadata(

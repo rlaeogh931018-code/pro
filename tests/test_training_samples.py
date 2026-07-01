@@ -12,7 +12,7 @@ from maple_price_tool.config import VisionConfig
 from maple_price_tool.domain import AnalysisResult, FieldResult, RecognitionTrace, Rect
 from recognition.dataset import RecognitionJsonlDataset, split_saved_training_image
 from recognition.preprocessing import DEFAULT_TARGET_HEIGHT, OPTION_VALUE_MAX_WIDTH, prepare_line_sample
-from recognition.training_samples import TrainingSampleWriter, normalize_training_label, parse_option_line
+from recognition.training_samples import TrainingSampleWriter, normalize_training_label, parse_equipment_final_line, parse_option_line
 
 
 def write_png(path: Path, image: np.ndarray) -> None:
@@ -78,6 +78,52 @@ def test_normalize_training_label_preserves_signs_and_zero():
 def test_parse_option_line():
     assert parse_option_line("INT +9%") == {"option_key": "int", "value_text": "+9%", "full_text": "INT +9%"}
     assert parse_option_line("잠재능력 인식 필요") is None
+
+
+def test_parse_korean_equipment_option_lines():
+    assert parse_option_line("마력 +130") == {"option_key": "magic_attack", "value_text": "+130", "full_text": "마력 +130"}
+    assert parse_option_line("업그레이드 가능 횟수: 0") == {
+        "option_key": "upgrade_count",
+        "value_text": "0",
+        "full_text": "업그레이드 가능 횟수: 0",
+    }
+
+
+def test_equipment_option_text_overrides_hidden_scalar_defaults(tmp_path):
+    analysis = make_analysis(tmp_path)
+    values = {
+        "req_level": 120,
+        "equipment_type": "Wand",
+        "price_meso": 1234567,
+        "str_value": 0,
+        "dex_value": 0,
+        "int_value": 0,
+        "luk_value": 0,
+        "attack": 0,
+        "magic_attack": 0,
+        "upgrade_count": 0,
+        "black_crystal": "",
+        "equipment_options": "마력 +130\n업그레이드 가능 횟수: 0",
+        "potential": "INT +9%",
+    }
+
+    assert parse_equipment_final_line(analysis.traces[1], values) == {
+        "option_key": "magic_attack",
+        "value_text": "+130",
+        "full_text": "마력 +130",
+    }
+
+    summary = TrainingSampleWriter(VisionConfig(training_dataset_dir=tmp_path / "datasets")).save_confirmed_samples(
+        analysis,
+        values,
+    )
+
+    assert summary.option_value_count == 2
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "datasets" / "option_values" / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(row["field_name"] == "magic_attack" and row["label"] == "+130" for row in rows)
 
 
 def test_training_sample_writer_saves_png_jsonl_and_deduplicates(tmp_path):
