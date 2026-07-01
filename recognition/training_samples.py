@@ -191,8 +191,10 @@ def validate_option_label_trace(
         return SemanticValidation(False, "non_option_line")
     if line_text and not extract_numeric_tail(line_text):
         return SemanticValidation(False, "non_option_line")
-    if bool(metadata.get("contains_value_like_text")) or bool(metadata.get("contains_colon_like_text")):
-        return SemanticValidation(False, "option_label_contains_value")
+    if bool(metadata.get("contains_colon_like_text")):
+        return SemanticValidation(False, "label_contains_colon")
+    if bool(metadata.get("contains_value_like_text")):
+        return SemanticValidation(False, "label_contains_value")
     field_key = canonical_option_key(FIELD_TO_OPTION_KEY.get(trace.field_name.removesuffix("_label"), trace.field_name.removesuffix("_label")))
     line_order_corrected = bool(metadata.get("line_order_corrected"))
     if field_key and field_key not in {"potential"} and field_key != label and not trace.field_name.startswith("potential_") and not line_order_corrected:
@@ -216,14 +218,16 @@ def validate_option_value_trace(
 ) -> SemanticValidation:
     if is_non_option_line(line_text):
         return SemanticValidation(False, "non_option_line")
+    if bool(metadata.get("value_sign_without_digit")):
+        return SemanticValidation(False, "option_value_only_sign" if str(label).strip() in {"+", "-"} else "option_value_has_no_digit")
     if not label or not any(char.isdigit() for char in label):
         return SemanticValidation(False, "semantic_label_mismatch")
     if set(label) - set(OPTION_VALUE_CHARSET):
         return SemanticValidation(False, "semantic_label_mismatch")
-    if bool(metadata.get("contains_label_text")) or bool(metadata.get("contains_colon_like_text")):
+    if bool(metadata.get("contains_colon_like_text")):
+        return SemanticValidation(False, "option_value_contains_colon")
+    if bool(metadata.get("contains_label_text")):
         return SemanticValidation(False, "option_value_contains_label_text")
-    if bool(metadata.get("value_sign_without_digit")):
-        return SemanticValidation(False, "semantic_label_mismatch")
     field_key = canonical_option_key(FIELD_TO_OPTION_KEY.get(trace.field_name, trace.field_name))
     if parsed_option_key and field_key and not trace.field_name.startswith("potential_") and parsed_option_key != field_key and not metadata.get("line_order_corrected"):
         return SemanticValidation(False, "trace_field_mismatch")

@@ -60,13 +60,34 @@ def render_preview(metadata: Path, task: str, limit: int = 100) -> str:
         else:
             residual, gray, mask = split_saved_training_image(image)
             if task == "option_label":
+                raw_line_crop = source_rect_crop(row, "raw_line_rect")
                 raw_crop = source_rect_crop(row, "raw_label_rect")
                 trimmed_crop = source_rect_crop(row, "trimmed_label_rect")
+                cells.append(f"<td>{img_or_not_saved(raw_line_crop)}</td>")
                 cells.append(f"<td>{img_tag(raw_crop) if raw_crop is not None else ''}</td>")
                 cells.append(f"<td>{img_tag(trimmed_crop) if trimmed_crop is not None else ''}</td>")
                 cells.append(f"<td>{img_tag(model_input_preview(image, 256))}</td>")
                 cells.append(f"<td>{img_tag(image)}</td>")
                 cells.append(f"<td>{img_tag(mask)}</td>")
+            elif task == "option_value":
+                raw_line_crop = source_rect_crop(row, "raw_line_rect")
+                raw_value_crop = first_source_rect_crop(row, ("raw_value_rect", "value_rect"))
+                cells.append(f"<td>{img_or_not_saved(raw_line_crop)}</td>")
+                cells.append(f"<td>{img_or_not_saved(raw_value_crop)}</td>")
+                cells.append(f"<td>{img_tag(model_input_preview(image, 256))}</td>")
+                cells.append(f"<td>{img_tag(image)}</td>")
+                cells.append(f"<td>{img_tag(residual)}</td>")
+                cells.append(f"<td>{img_tag(gray)}</td>")
+                cells.append(f"<td>{img_tag(mask)}</td>")
+            elif task == "item_metadata":
+                raw_line_crop = source_rect_crop(row, "raw_line_rect")
+                label_crop = source_rect_crop(row, "label_crop_rect")
+                value_crop = source_rect_crop(row, "value_crop_rect")
+                cells.append(f"<td>{img_or_not_saved(raw_line_crop)}</td>")
+                cells.append(f"<td>{img_or_not_saved(label_crop)}</td>")
+                cells.append(f"<td>{img_or_not_saved(value_crop)}</td>")
+                cells.append(f"<td>{img_tag(model_input_preview(image, 256))}</td>")
+                cells.append(f"<td>{img_tag(image)}</td>")
             else:
                 cells.append(f"<td>{img_tag(image)}</td>")
                 cells.append(f"<td>{img_tag(residual)}</td>")
@@ -82,12 +103,18 @@ def render_preview(metadata: Path, task: str, limit: int = 100) -> str:
             + f"<td class='meta'>{metadata_html}</td>"
             "</tr>"
         )
-    headers = (
-        "<th>Raw</th><th>Trimmed</th><th>Model</th><th>Composite</th><th>Mask</th>"
-        if task == "option_label"
-        else "<th>Composite</th><th>Residual</th><th>Gray</th><th>Mask</th>"
-    )
+    headers = headers_for_task(task)
     return HTML_TEMPLATE.format(task=html.escape(task), headers=headers, rows="\n".join(body))
+
+
+def headers_for_task(task: str) -> str:
+    if task == "option_label":
+        return "<th>Raw Line</th><th>Raw Label</th><th>Label Crop</th><th>Model</th><th>Composite</th><th>Mask</th>"
+    if task == "option_value":
+        return "<th>Raw Line</th><th>Value Crop</th><th>Model</th><th>Composite</th><th>Residual</th><th>Gray</th><th>Mask</th>"
+    if task == "item_metadata":
+        return "<th>Raw Line</th><th>Metadata Label</th><th>Metadata Value</th><th>Model</th><th>Composite</th>"
+    return "<th>Composite</th><th>Residual</th><th>Gray</th><th>Mask</th>"
 
 
 def read_rows(metadata: Path) -> list[dict]:
@@ -110,6 +137,12 @@ def img_tag(image: np.ndarray) -> str:
     return f"<img src='data:image/png;base64,{data}' alt='sample'>"
 
 
+def img_or_not_saved(image: np.ndarray | None) -> str:
+    if image is None:
+        return "<span class='missing'>not saved</span>"
+    return img_tag(image)
+
+
 def source_rect_crop(row: dict, rect_key: str) -> np.ndarray | None:
     source_text = str(row.get("source_image_path", "")).strip()
     rect = row.get(rect_key)
@@ -128,6 +161,14 @@ def source_rect_crop(row: dict, rect_key: str) -> np.ndarray | None:
     if right <= left or bottom <= top:
         return None
     return image[top:bottom, left:right]
+
+
+def first_source_rect_crop(row: dict, rect_keys: tuple[str, ...]) -> np.ndarray | None:
+    for rect_key in rect_keys:
+        image = source_rect_crop(row, rect_key)
+        if image is not None:
+            return image
+    return None
 
 
 def model_input_preview(image: np.ndarray, max_width: int) -> np.ndarray:
@@ -170,6 +211,7 @@ def metadata_block(row: dict) -> str:
         "was_corrected",
         "confidence",
         "crop_rect",
+        "raw_line_rect",
         "label_crop_rect",
         "value_crop_rect",
         "raw_label_rect",

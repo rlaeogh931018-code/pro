@@ -170,8 +170,10 @@ def option_label_semantic_issues(record: SampleRecord, row: dict, prefix: str, l
         issues.append(f"{prefix}: non_option_line")
     if line_text and not any(char.isdigit() for char in line_text):
         issues.append(f"{prefix}: non_option_line")
-    if bool(row.get("contains_value_like_text")) or bool(row.get("contains_colon_like_text")):
-        issues.append(f"{prefix}: option_label_contains_value")
+    if bool(row.get("contains_colon_like_text")):
+        issues.append(f"{prefix}: label_contains_colon")
+    if bool(row.get("contains_value_like_text")):
+        issues.append(f"{prefix}: label_contains_value")
     parsed_key = canonical_option_key(str(row.get("parsed_option_key") or row.get("option_key") or ""))
     if parsed_key and parsed_key != record.label:
         issues.append(f"{prefix}: semantic_label_mismatch parsed={parsed_key} label={record.label}")
@@ -188,10 +190,13 @@ def option_value_semantic_issues(record: SampleRecord, row: dict, prefix: str, l
     issues: list[str] = []
     if is_non_option_line(line_text):
         issues.append(f"{prefix}: non_option_line")
-    if bool(row.get("contains_label_text")) or bool(row.get("contains_colon_like_text")):
+    if bool(row.get("contains_colon_like_text")):
+        issues.append(f"{prefix}: option_value_contains_colon")
+    if bool(row.get("contains_label_text")):
         issues.append(f"{prefix}: option_value_contains_label_text")
     if bool(row.get("value_sign_without_digit")):
-        issues.append(f"{prefix}: option_value_without_digit {record.label}")
+        reason = "option_value_only_sign" if record.label.strip() in {"+", "-"} else "option_value_has_no_digit"
+        issues.append(f"{prefix}: {reason} {record.label}")
     parsed_value = normalize_value_text(str(row.get("parsed_value_text") or row.get("value_text") or ""))
     if parsed_value and parsed_value != normalize_value_text(record.label):
         issues.append(f"{prefix}: semantic_label_mismatch parsed_value={parsed_value} label={record.label}")

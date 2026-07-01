@@ -66,13 +66,14 @@ def req_level_trace() -> RecognitionTrace:
         "req_level",
         field_type="item_metadata",
         selected_prediction="98",
-        crop_rect=Rect(20, 10, 110, 28),
+        crop_rect=Rect(72, 10, 110, 28),
         confidence=0.9,
         crop_metadata={
             "metadata_key": "req_level",
             "line_type": "metadata_req_level",
             "raw_line_text": "REQ LEV : 98",
             "line_text": "REQ LEV : 98",
+            "raw_line_rect": {"left": 20, "top": 10, "right": 110, "bottom": 28},
             "label_crop_rect": {"left": 20, "top": 10, "right": 70, "bottom": 28},
             "value_crop_rect": {"left": 72, "top": 10, "right": 110, "bottom": 28},
         },
@@ -84,13 +85,14 @@ def equipment_category_trace() -> RecognitionTrace:
         "equipment_category",
         field_type="item_metadata",
         selected_prediction="완드",
-        crop_rect=Rect(20, 30, 130, 48),
+        crop_rect=Rect(82, 30, 130, 48),
         confidence=0.9,
         crop_metadata={
             "metadata_key": "equipment_category",
             "line_type": "metadata_equipment_category",
             "raw_line_text": "장비분류 : 완드",
             "line_text": "장비분류 : 완드",
+            "raw_line_rect": {"left": 20, "top": 30, "right": 130, "bottom": 48},
             "label_crop_rect": {"left": 20, "top": 30, "right": 80, "bottom": 48},
             "value_crop_rect": {"left": 82, "top": 30, "right": 130, "bottom": 48},
         },
@@ -173,6 +175,9 @@ def test_req_level_and_equipment_category_are_saved_as_item_metadata(tmp_path):
     assert {row["metadata_key"] for row in rows} == {"req_level", "equipment_category"}
     assert {row["label"] for row in rows} == {"98", "완드"}
     assert all(row["review_status"] == "unreviewed" for row in rows)
+    for row in rows:
+        assert row["crop_rect"] == row["value_crop_rect"]
+        assert row["crop_rect"] != row["raw_line_rect"]
 
 
 def test_metadata_lines_do_not_enter_option_datasets_and_ignored_lines_are_not_saved(tmp_path):

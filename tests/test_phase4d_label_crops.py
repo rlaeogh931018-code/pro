@@ -136,6 +136,35 @@ def test_colon_split_keeps_label_and_value_separate(text, key, value):
 
 
 @pytest.mark.parametrize(
+    ("text", "key", "value"),
+    [
+        ("MAGIC : +122", "magic_attack", "+122"),
+        ("ATTACK : +72", "attack", "+72"),
+        ("INT : +4", "int", "+4"),
+        ("UPGRADE COUNT : 0", "upgrade_count", "0"),
+        ("MAGIC : +9%", "magic_attack", "+9%"),
+    ],
+)
+def test_phase4h_label_value_crop_is_not_whole_line(text, key, value):
+    line = make_line(text)
+    label_trace, value_trace = make_line_training_traces(line, (key, 0.9, Rect(8, 9, 50, 20)), text, 0.9, 0)
+
+    assert label_trace.field_type == "option_label"
+    assert value_trace.field_type == "option_value"
+    assert label_trace.crop_metadata["rejection_reason"] == ""
+    assert value_trace.crop_metadata["rejection_reason"] == ""
+    assert label_trace.crop_metadata["contains_colon_like_text"] is False
+    assert label_trace.crop_metadata["contains_value_like_text"] is False
+    assert value_trace.crop_metadata["contains_label_text"] is False
+    assert value_trace.crop_metadata["contains_colon_like_text"] is False
+    assert value_trace.crop_metadata["parsed_value_text"] == value
+    assert label_trace.crop_rect is not None
+    assert value_trace.crop_rect is not None
+    assert label_trace.crop_rect.right < value_trace.crop_rect.left
+    assert value_trace.crop_rect.width < line.rect.width // 3
+
+
+@pytest.mark.parametrize(
     ("key", "text", "value"),
     [
         ("int", "REQ STR : 0", 0),

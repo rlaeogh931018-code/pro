@@ -285,7 +285,7 @@ def test_semantic_validation_rejects_label_delimiters_and_sign_only_values():
         selected_prediction="int",
         crop_metadata={"line_text": "INT : +9%", "parsed_option_key": "int", "contains_colon_like_text": True},
     )
-    assert semantic_validate_trace(label_trace, "option_label", "int").reason == "option_label_contains_value"
+    assert semantic_validate_trace(label_trace, "option_label", "int").reason == "label_contains_colon"
 
     value_trace = RecognitionTrace(
         "attack",
@@ -298,7 +298,37 @@ def test_semantic_validation_rejects_label_delimiters_and_sign_only_values():
             "value_sign_without_digit": True,
         },
     )
-    assert semantic_validate_trace(value_trace, "option_value", "+").reason == "semantic_label_mismatch"
+    assert semantic_validate_trace(value_trace, "option_value", "+").reason == "option_value_only_sign"
+
+
+def test_phase4h_validation_rejects_value_bleed_and_label_text():
+    label_value = RecognitionTrace(
+        "attack_label",
+        field_type="option_label",
+        selected_prediction="attack",
+        crop_metadata={"line_text": "공격력 : +72", "parsed_option_key": "attack", "contains_value_like_text": True},
+    )
+    value_label_text = RecognitionTrace(
+        "magic_attack",
+        field_type="option_value",
+        selected_prediction="+122",
+        crop_metadata={
+            "line_text": "마력 : +122",
+            "parsed_option_key": "magic_attack",
+            "parsed_value_text": "+122",
+            "contains_label_text": True,
+        },
+    )
+    value_colon = RecognitionTrace(
+        "int_value",
+        field_type="option_value",
+        selected_prediction="+4",
+        crop_metadata={"line_text": "INT : +4", "parsed_option_key": "int", "parsed_value_text": "+4", "contains_colon_like_text": True},
+    )
+
+    assert semantic_validate_trace(label_value, "option_label", "attack").reason == "label_contains_value"
+    assert semantic_validate_trace(value_label_text, "option_value", "+122").reason == "option_value_contains_label_text"
+    assert semantic_validate_trace(value_colon, "option_value", "+4").reason == "option_value_contains_colon"
 
 
 def test_default_dataset_loader_requires_approved_even_for_human_confirmed(tmp_path):

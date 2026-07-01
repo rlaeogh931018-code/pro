@@ -2054,6 +2054,7 @@ class OpenCvTemplateRecognizer:
             "line_type": "metadata_req_level",
             "raw_line_text": f"REQ LEV : {value}",
             "line_text": f"REQ LEV : {value}",
+            "raw_line_rect": rect_to_dict(line_rect),
             "label_crop_rect": rect_to_dict(label_rect),
             "value_crop_rect": rect_to_dict(value_rect),
             "parsed_value_text": str(value),
@@ -2067,7 +2068,7 @@ class OpenCvTemplateRecognizer:
                 raw_prediction=raw_digits,
                 selection_reason="metadata_req_level",
                 confidence=min(confidence, score),
-                crop_rect=line_rect,
+                crop_rect=value_rect,
                 crop_metadata=metadata,
                 template_candidates=[RecognitionCandidate(value=value, score=min(confidence, score), source="template")],
             )
@@ -2098,6 +2099,7 @@ class OpenCvTemplateRecognizer:
             "line_type": "metadata_equipment_category",
             "raw_line_text": f"장비분류 : {value}",
             "line_text": f"장비분류 : {value}",
+            "raw_line_rect": rect_to_dict(line_rect),
             "label_crop_rect": rect_to_dict(label_rect),
             "value_crop_rect": rect_to_dict(value_rect),
             "parsed_value_text": str(value),
@@ -2111,7 +2113,7 @@ class OpenCvTemplateRecognizer:
                 raw_prediction=raw_value,
                 selection_reason="metadata_equipment_category",
                 confidence=min(confidence, score),
-                crop_rect=line_rect,
+                crop_rect=value_rect,
                 crop_metadata=metadata,
                 template_candidates=[RecognitionCandidate(value=value, score=min(confidence, score), source="template")],
             )
@@ -2687,12 +2689,21 @@ def make_line_training_traces(
     key, score, local_rect = match
     field_name = f"potential_{potential_index}" if potential_index is not None else OPTION_VALUE_FIELDS.get(key, key)
     line_type = "potential_option" if potential_index is not None else "base_option"
+    line_mask = maple_text_mask(line.image)
+    line_bbox = mask_bbox(line_mask) or Rect(0, 0, line.image.shape[1], line.image.shape[0])
+    raw_line_rect = Rect(
+        line.rect.left + line_bbox.left,
+        line.rect.top + line_bbox.top,
+        line.rect.left + line_bbox.right,
+        line.rect.top + line_bbox.bottom,
+    )
     label_crop = build_option_label_crop_rect(line, local_rect, text)
     label_rect = label_crop["trimmed_rect"]
     label_metadata = {
         "line_text": text,
         "parsed_line_text": text,
         "line_type": line_type,
+        "raw_line_rect": rect_to_dict(raw_line_rect),
         "parsed_option_key": key,
         "selected_prediction": key,
         "raw_label_rect": rect_to_dict(label_crop["raw_rect"]),
@@ -2728,6 +2739,7 @@ def make_line_training_traces(
         "line_text": text,
         "parsed_line_text": text,
         "line_type": line_type,
+        "raw_line_rect": rect_to_dict(raw_line_rect),
         "parsed_option_key": key,
         "parsed_value_text": value_text,
         "label_rect": rect_to_dict(label_crop["trimmed_rect"]),
@@ -3058,8 +3070,10 @@ def option_label_crop_quality(
         rejection_reason = "label_crop_too_tight"
     elif touches_left or touches_right or touches_top or touches_bottom:
         rejection_reason = "label_crop_clipped"
+    elif contains_colon_like_text:
+        rejection_reason = "label_contains_colon"
     elif contains_value_like_text:
-        rejection_reason = "option_label_contains_value"
+        rejection_reason = "label_contains_value"
     elif foreground_ratio <= 0.005:
         rejection_reason = "label_crop_too_tight"
     score = 1.0
@@ -3101,15 +3115,23 @@ def option_value_crop_quality(
     contains_colon_like_text = colon_x is not None and rect.left <= colon_x < rect.right
     has_value_digit = any(char.isdigit() for char in str(value_text))
     sign_without_digit = str(value_text).strip() in {"+", "-"} or not has_value_digit
-    full_line_like = bool(line_text and value_text and len(str(line_text).strip()) > len(str(value_text).strip()) + 4 and rect.width > 90)
+    value_text_width_budget = max(72, len(str(value_text).strip()) * 18 + 36)
+    full_line_like = bool(
+        line_text
+        and value_text
+        and len(str(line_text).strip()) >= len(str(value_text).strip()) + 4
+        and rect.width > value_text_width_budget
+    )
     rejection_reason = ""
     if rect.width < 6 or rect.height < 8:
         rejection_reason = "value_crop_too_tight"
     elif foreground_ratio <= 0.001:
         rejection_reason = "value_crop_too_tight"
     elif sign_without_digit:
-        rejection_reason = "semantic_label_mismatch"
-    elif contains_label_text or contains_colon_like_text or full_line_like:
+        rejection_reason = "option_value_only_sign" if str(value_text).strip() in {"+", "-"} else "option_value_has_no_digit"
+    elif contains_colon_like_text:
+        rejection_reason = "option_value_contains_colon"
+    elif contains_label_text or full_line_like:
         rejection_reason = "option_value_contains_label_text"
     return {
         "crop_width": rect.width,
