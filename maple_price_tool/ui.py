@@ -521,16 +521,16 @@ class ReviewWindow(QMainWindow):
 
     def current_values(self) -> dict[str, object]:
         return {
-            "req_level": int(self._field_value("req_level")),
+            "req_level": parse_required_int(self._field_value("req_level")),
             "equipment_type": self._field_value("equipment_type").strip(),
-            "price_meso": int(self._field_value("price_meso").replace(",", "")),
-            "str_value": int(self._field_value("str_value")),
-            "dex_value": int(self._field_value("dex_value")),
-            "int_value": int(self._field_value("int_value")),
-            "luk_value": int(self._field_value("luk_value")),
-            "attack": int(self._field_value("attack")),
-            "magic_attack": int(self._field_value("magic_attack")),
-            "upgrade_count": int(self._field_value("upgrade_count")),
+            "price_meso": parse_required_int(self._field_value("price_meso")),
+            "str_value": parse_optional_int(self._field_value("str_value")),
+            "dex_value": parse_optional_int(self._field_value("dex_value")),
+            "int_value": parse_optional_int(self._field_value("int_value")),
+            "luk_value": parse_optional_int(self._field_value("luk_value")),
+            "attack": parse_optional_int(self._field_value("attack")),
+            "magic_attack": parse_optional_int(self._field_value("magic_attack")),
+            "upgrade_count": parse_optional_int(self._field_value("upgrade_count")),
             "black_crystal": self._field_value("black_crystal").strip(),
             "equipment_options": self._field_value("equipment_options").strip(),
             "potential": self._field_value("potential").strip(),
@@ -595,13 +595,6 @@ class ReviewWindow(QMainWindow):
             "req_level",
             "equipment_type",
             "price_meso",
-            "str_value",
-            "dex_value",
-            "int_value",
-            "luk_value",
-            "attack",
-            "magic_attack",
-            "upgrade_count",
             "potential",
         ]
         missing = []
@@ -675,6 +668,20 @@ class CaptureSettingsDialog(QDialog):
         self.apply_to_config()
         save_config(self.config)
         self.accept()
+
+
+def parse_required_int(text: str) -> int:
+    normalized = text.strip().replace(",", "")
+    if normalized == "" or normalized.lower() == "none":
+        raise ValueError("required integer field is empty")
+    return int(normalized)
+
+
+def parse_optional_int(text: str) -> int:
+    normalized = text.strip().replace(",", "")
+    if normalized == "" or normalized.lower() == "none":
+        return 0
+    return int(normalized)
 
 
 def before_sidecar_path(after_image_path: Path) -> Path:
