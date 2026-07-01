@@ -12,7 +12,13 @@ from maple_price_tool.config import VisionConfig
 from maple_price_tool.domain import AnalysisResult, FieldResult, RecognitionTrace, Rect
 from recognition.dataset import RecognitionJsonlDataset, split_saved_training_image
 from recognition.preprocessing import DEFAULT_TARGET_HEIGHT, OPTION_VALUE_MAX_WIDTH, prepare_line_sample
-from recognition.training_samples import TrainingSampleWriter, normalize_training_label, parse_equipment_final_line, parse_option_line
+from recognition.training_samples import (
+    TrainingSampleWriter,
+    normalize_training_label,
+    parse_equipment_final_line,
+    parse_option_line,
+    semantic_validate_trace,
+)
 
 
 def write_png(path: Path, image: np.ndarray) -> None:
@@ -200,6 +206,77 @@ def test_training_sample_writer_saves_png_jsonl_and_deduplicates(tmp_path):
     assert rows[0]["channel_order"] == ["normalized_residual", "after_grayscale", "foreground_mask"]
     assert any(row["label"] == "+130" for row in rows)
     assert any(row["label"] == "0" for row in rows)
+
+
+def test_price_training_sample_uses_tight_crop_and_user_confirmed_comma_label(tmp_path):
+    analysis = make_analysis(tmp_path)
+    price_trace = next(trace for trace in analysis.traces if trace.field_name == "price_meso")
+    price_trace.crop_rect = Rect(0, 40, 120, 75)
+    price_trace.selected_prediction = "23588919"
+    price_trace.crop_metadata.update(
+        {
+            "crop_source": "price_tight_crop",
+            "crop_width": 80,
+            "crop_height": 20,
+            "price_search_rect": {"left": 0, "top": 40, "right": 120, "bottom": 75},
+            "price_tight_rect": {"left": 20, "top": 45, "right": 100, "bottom": 65},
+            "foreground_ratio": 0.1,
+            "component_count": 8,
+        }
+    )
+    values = analysis.editable_values()
+    values["price_meso"] = 23588919
+    values["price_meso_text"] = "23,588,919"
+
+    summary = TrainingSampleWriter(VisionConfig(training_dataset_dir=tmp_path / "datasets")).save_confirmed_samples(
+        analysis,
+        values,
+    )
+
+    assert summary.price_count == 1
+    row = json.loads((tmp_path / "datasets" / "prices" / "samples.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert row["label"] == "23,588,919"
+    assert row["crop_source"] == "price_tight_crop"
+    assert row["crop_rect"] == {"left": 20, "top": 45, "right": 100, "bottom": 65}
+    saved = cv2.imdecode(
+        np.fromfile(str(tmp_path / "datasets" / "prices" / row["image_path"]), dtype=np.uint8),
+        cv2.IMREAD_UNCHANGED,
+    )
+    assert saved.shape[:2] == (20, 80)
+
+
+def test_price_training_sample_rejects_missing_tight_crop_and_bad_label(tmp_path):
+    analysis = make_analysis(tmp_path)
+    price_trace = next(trace for trace in analysis.traces if trace.field_name == "price_meso")
+    price_trace.crop_metadata = {"line_type": "price", "coordinate_system": "full_image"}
+    values = analysis.editable_values()
+    values["price_meso_text"] = "1,234,567"
+
+    summary = TrainingSampleWriter(VisionConfig(training_dataset_dir=tmp_path / "datasets")).save_confirmed_samples(
+        analysis,
+        values,
+    )
+
+    assert summary.price_count == 0
+    assert summary.rejected_count == 1
+    row = next(json.loads(line) for line in (tmp_path / "datasets" / "rejected" / "samples.jsonl").read_text(encoding="utf-8").splitlines() if json.loads(line)["field_name"] == "price_meso")
+    assert row["rejection_reason"] == "price_tight_crop_missing"
+
+    bad_label_trace = RecognitionTrace(
+        "price_meso",
+        field_type="price",
+        selected_prediction="1234",
+        crop_rect=Rect(20, 45, 100, 65),
+        crop_metadata={
+            "line_type": "price",
+            "coordinate_system": "full_image",
+            "crop_source": "price_tight_crop",
+            "price_tight_rect": {"left": 20, "top": 45, "right": 100, "bottom": 65},
+            "crop_width": 80,
+            "crop_height": 20,
+        },
+    )
+    assert semantic_validate_trace(bad_label_trace, "price", "12원").reason == "invalid_price_charset"
 
 
 def test_training_crop_uses_real_residual_channel_not_gray(tmp_path):

@@ -530,6 +530,8 @@ class ReviewWindow(QMainWindow):
             self.crop_rows_layout.addWidget(self.make_crop_row_widget(source, row))
 
     def make_crop_row_widget(self, source: QPixmap, row: dict[str, object]) -> QWidget:
+        if row.get("line_type") == "price" or row.get("sort_key") == "price":
+            return self.make_price_crop_row_widget(source, row)
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(4, 4, 4, 6)
@@ -541,6 +543,41 @@ class ReviewWindow(QMainWindow):
         crop_row.addWidget(labeled_crop_widget("label", crop_image_rect(source, row.get("label_crop_rect"), crop_fallback_text("label"))))
         crop_row.addWidget(labeled_crop_widget("value", crop_image_rect(source, row.get("value_crop_rect"), crop_fallback_text("value"))))
         crop_row.addWidget(labeled_crop_widget("model", crop_image_label(source, row.get("model_trace"), crop_fallback_text("model"))))
+        layout.addLayout(crop_row)
+        detail = QLabel(crop_row_detail(row))
+        detail.setWordWrap(True)
+        detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(detail)
+        widget.setStyleSheet(crop_row_style(row))
+        return widget
+
+    def make_price_crop_row_widget(self, source: QPixmap, row: dict[str, object]) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(4, 4, 4, 6)
+        title = QLabel(crop_row_title(row))
+        title.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(title)
+        crop_row = QHBoxLayout()
+        crop_row.addWidget(
+            labeled_crop_widget(
+                "search",
+                crop_image_path(row.get("price_search_roi_path"), crop_image_rect(source, row.get("raw_line_rect"), "search roi: not available")),
+            )
+        )
+        crop_row.addWidget(
+            labeled_crop_widget(
+                "tight",
+                crop_image_path(row.get("price_tight_crop_path"), crop_image_rect(source, row.get("value_crop_rect"), "tight crop: not available")),
+            )
+        )
+        crop_row.addWidget(labeled_crop_widget("color mask", crop_image_path(row.get("price_color_mask_path"), fallback_text="color mask: not available")))
+        crop_row.addWidget(
+            labeled_crop_widget(
+                "component",
+                crop_image_path(row.get("price_component_mask_path"), fallback_text="component mask: not available"),
+            )
+        )
         layout.addLayout(crop_row)
         detail = QLabel(crop_row_detail(row))
         detail.setWordWrap(True)
@@ -576,6 +613,7 @@ class ReviewWindow(QMainWindow):
             "req_level": parse_required_int(self._field_value("req_level")),
             "equipment_type": self._field_value("equipment_type").strip(),
             "price_meso": parse_required_int(self._field_value("price_meso")),
+            "price_meso_text": self._field_value("price_meso").strip(),
             "str_value": 0,
             "dex_value": 0,
             "int_value": 0,
@@ -777,6 +815,10 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
                 "label_trace": None,
                 "value_trace": None,
                 "model_trace": None,
+                "price_search_roi_path": "",
+                "price_tight_crop_path": "",
+                "price_color_mask_path": "",
+                "price_component_mask_path": "",
             },
         )
         metadata = trace.crop_metadata or {}
@@ -803,6 +845,9 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
             row["semantic_validation_reason"] = str(metadata.get("semantic_validation_reason") or "")
         if metadata.get("review_status"):
             row["review_status"] = str(metadata.get("review_status"))
+        for path_key in ("price_search_roi_path", "price_tight_crop_path", "price_color_mask_path", "price_component_mask_path"):
+            if metadata.get(path_key) and not row[path_key]:
+                row[path_key] = str(metadata.get(path_key))
         if row["raw_line_rect"] is None:
             row["raw_line_rect"] = rect_from_metadata(metadata.get("raw_line_rect") or metadata.get("price_search_rect") or metadata.get("search_rect"))
         if row["label_crop_rect"] is None:
@@ -833,7 +878,12 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
                 note_parts.append(f"value:{original_value}")
             if note_parts:
                 row["notes"].append("corrected from " + ", ".join(note_parts))
-        if trace.field_type == "item_metadata":
+        if row["line_type"] == "price" or trace.field_name == "price_meso":
+            row["label"] = "price"
+            row["value"] = display_value_for_trace(trace)
+            row["value_trace"] = trace
+            row["model_trace"] = trace
+        elif trace.field_type == "item_metadata":
             row["label"] = str(metadata.get("metadata_key") or trace.field_name)
             row["value"] = display_value_for_trace(trace)
             row["value_trace"] = trace
@@ -847,18 +897,13 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
             row["value"] = display_value_for_trace(trace)
             row["value_trace"] = trace
             row["model_trace"] = trace
-        elif trace.field_type == "price":
-            row["label"] = "price"
-            row["value"] = display_value_for_trace(trace)
-            row["value_trace"] = trace
-            row["model_trace"] = trace
     return sorted(rows.values(), key=sort_preview_row_key)
 
 
 def crop_row_key(trace) -> object:
     if trace.field_type == "item_metadata":
         return f"metadata:{trace.crop_metadata.get('metadata_key') or trace.field_name}"
-    if trace.field_type == "price":
+    if trace.field_type == "price" or trace.field_name == "price_meso" or (trace.crop_metadata or {}).get("line_type") == "price":
         return "price"
     if trace.field_name in {"req_level", "req_level_label"}:
         return "req_level"
@@ -967,6 +1012,25 @@ def crop_image_rect(source: QPixmap, rect: Rect | None, fallback: str) -> QLabel
         return label
     scaled = crop.scaled(CROP_THUMB_MAX, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
     label.setPixmap(scaled)
+    return label
+
+
+def crop_image_path(path_value: object, fallback: QLabel | None = None, fallback_text: str = "crop: not available") -> QLabel:
+    if path_value:
+        pixmap = QPixmap(str(path_value))
+        if not pixmap.isNull():
+            label = QLabel()
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setMinimumSize(CROP_THUMB_MAX)
+            label.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
+            label.setPixmap(pixmap.scaled(CROP_THUMB_MAX, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation))
+            return label
+    if fallback is not None:
+        return fallback
+    label = QLabel(fallback_text)
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    label.setMinimumSize(CROP_THUMB_MAX)
+    label.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
     return label
 
 

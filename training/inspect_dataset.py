@@ -142,8 +142,12 @@ def collect_quality_issues(records: list[SampleRecord], rows: list[dict], task: 
         if task == "price":
             if str(row.get("line_type") or "") != "price":
                 issues.append(f"{prefix}: price_line_type_mismatch")
-            if not row.get("price_tight_rect") and not row.get("tight_rect") and not row.get("value_crop_rect"):
+            if not row.get("price_tight_rect") and not row.get("tight_rect"):
                 issues.append(f"{prefix}: price_tight_crop_missing")
+            if str(row.get("crop_source") or "") not in {"", "price_tight_crop"}:
+                issues.append(f"{prefix}: price_crop_source_mismatch")
+            if bool(row.get("price_crnn_conflict")):
+                issues.append(f"{prefix}: price_crnn_conflict")
         if task == "option_value" and not any(char.isdigit() for char in record.label):
             issues.append(f"{prefix}: option_value_without_digit {record.label}")
         issues.extend(semantic_issues(record, row, prefix, task))

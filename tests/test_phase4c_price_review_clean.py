@@ -8,7 +8,9 @@ import numpy as np
 
 from maple_price_tool.config import VisionConfig
 from maple_price_tool.domain import Rect
-from maple_price_tool.vision import OpenCvTemplateRecognizer, price_color_mask
+from maple_price_tool.domain import RecognitionCandidate
+from maple_price_tool.vision import OpenCvTemplateRecognizer, PriceDetectionResult, price_color_mask
+from recognition.training_samples import semantic_validate_trace
 from recognition.dataset import RecognitionJsonlDataset
 from training.clean_dataset import find_flagged_rows
 from training.review_dataset import main as review_main
@@ -110,6 +112,39 @@ def test_missing_price_text_is_rejected():
     )
 
     assert result.rejection_reason == "price_text_not_found"
+
+
+def test_price_crnn_checkpoint_missing_falls_back_to_template_only():
+    recognizer = OpenCvTemplateRecognizer(VisionConfig(save_debug_images=False, price_crnn_checkpoint=Path("missing_price_crnn.pt")))
+
+    assert recognizer.price_crnn_candidates_from_tight_crop(np.zeros((20, 80, 3), dtype=np.uint8)) == []
+
+
+def test_price_crnn_candidates_are_recorded_and_conflict_needs_review(monkeypatch):
+    recognizer = OpenCvTemplateRecognizer(VisionConfig(save_debug_images=False))
+    monkeypatch.setattr(
+        recognizer,
+        "price_crnn_candidates_from_tight_crop",
+        lambda _crop: [RecognitionCandidate(value="999,999", score=0.91, source="price_crnn")],
+    )
+    detection = PriceDetectionResult(
+        value=123456,
+        confidence=0.8,
+        raw_digits="123456",
+        search_rect=Rect(0, 0, 160, 40),
+        tight_rect=Rect(20, 10, 100, 30),
+        tight_crop=np.ones((20, 80, 3), dtype=np.uint8),
+        foreground_ratio=0.1,
+        component_count=6,
+    )
+
+    trace = recognizer.price_trace_from_detection(detection, 123456, 0.8)
+
+    assert trace.selected_prediction == 123456
+    assert trace.needs_review is True
+    assert trace.model_candidates[0].value == "999,999"
+    assert trace.crop_metadata["price_crnn_conflict"] is True
+    assert semantic_validate_trace(trace, "price", "123,456").reason == "price_crnn_conflict"
 
 
 def test_review_status_flow_and_approved_dataset_filter(tmp_path):

@@ -15,7 +15,8 @@ from .config import VisionConfig
 from .domain import AnalysisResult, CaptureResult, FieldResult, RecognitionCandidate, RecognitionTrace, Rect
 from recognition.model_registry import ModelRegistry
 from recognition.alignment import align_before_to_after
-from recognition.preprocessing import PRICE_MAX_WIDTH
+from recognition.ctc_decoder import CTCCodec, PRICE_CHARSET, prefix_beam_search
+from recognition.preprocessing import DEFAULT_TARGET_HEIGHT, PRICE_MAX_WIDTH, prepare_line_sample
 
 try:
     import easyocr
@@ -318,6 +319,14 @@ def rect_to_dict(rect: Rect | None) -> dict[str, int] | None:
     return {"left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom}
 
 
+def artifact_path_text(path: Path | None) -> str:
+    return "" if path is None else str(path)
+
+
+def price_digits_only(value: object) -> str:
+    return re.sub(r"\D", "", str(value or ""))
+
+
 @dataclass
 class PriceDetectionResult:
     value: int | None
@@ -349,8 +358,11 @@ class PriceDetectionResult:
     def metadata(self) -> dict[str, object]:
         rect = self.tight_rect or self.search_rect
         return {
+            "field_name": "price_meso",
+            "field_type": "price",
             "line_type": "price",
             "coordinate_system": "full_image",
+            "crop_source": "price_tight_crop" if self.tight_rect is not None else "",
             "crop_width": rect.width,
             "crop_height": rect.height,
             "foreground_ratio": self.foreground_ratio,
@@ -370,6 +382,9 @@ class PriceDetectionResult:
             "tight_rect": rect_to_dict(self.tight_rect),
             "raw_line_rect": rect_to_dict(self.search_rect),
             "value_crop_rect": rect_to_dict(self.tight_rect),
+            "validation_status": "rejected" if self.needs_review else "unreviewed",
+            "validation_reason": self.rejection_reason,
+            "review_status": "unreviewed",
         }
 
 
@@ -1949,7 +1964,7 @@ class OpenCvTemplateRecognizer:
         bottom = int(selected["bottom"])
         tight_rect = Rect(search_rect.left + left, search_rect.top + top, search_rect.left + right, search_rect.top + bottom)
         tight_crop = crop_rect(image, tight_rect)
-        tight_digits, tight_digit_confidence = recognize_maple_price_digits(tight_crop, self.digit_templates)
+        tight_digits, tight_digit_confidence = self.recognize_price_from_tight_crop(tight_crop)
         component_mask = np.zeros(color_mask.shape, dtype="uint8")
         component_mask[top:bottom, left:right] = color_mask[top:bottom, left:right]
         crop_mask = color_mask[top:bottom, left:right]
@@ -1993,6 +2008,40 @@ class OpenCvTemplateRecognizer:
             search_roi=search_roi,
         )
 
+    def recognize_price_from_tight_crop(self, tight_crop: np.ndarray) -> tuple[str, float]:
+        return recognize_maple_price_digits(tight_crop, self.digit_templates)
+
+    def price_crnn_candidates_from_tight_crop(self, tight_crop: np.ndarray | None) -> list[RecognitionCandidate]:
+        if tight_crop is None or tight_crop.size == 0:
+            return []
+        loaded = self.model_registry.get_price_crnn()
+        if loaded is None:
+            return []
+        try:
+            import torch
+        except Exception:  # pragma: no cover - optional dependency guard.
+            return []
+        gray = cv2.cvtColor(tight_crop, cv2.COLOR_BGR2GRAY) if tight_crop.ndim == 3 else tight_crop
+        mask = price_color_mask(tight_crop)
+        prepared = prepare_line_sample(gray, gray, mask, DEFAULT_TARGET_HEIGHT, PRICE_MAX_WIDTH)
+        device = loaded.status.device
+        with torch.no_grad():
+            logits = loaded.model(prepared.tensor.unsqueeze(0).to(device))
+        sequence = logits[:, 0, :].detach().cpu().numpy()
+        codec = CTCCodec(PRICE_CHARSET)
+        decoded = prefix_beam_search(
+            sequence,
+            codec,
+            beam_width=max(1, int(self.config.ctc_beam_width)),
+            top_k=max(1, int(self.config.ctc_top_k)),
+        )
+        candidates: list[RecognitionCandidate] = []
+        for candidate in decoded:
+            text = "".join(char for char in candidate.text if char in PRICE_CHARSET)
+            if text:
+                candidates.append(RecognitionCandidate(value=text, score=float(candidate.score), source="price_crnn"))
+        return candidates
+
     def price_trace_from_detection(
         self,
         detection: PriceDetectionResult,
@@ -2000,8 +2049,34 @@ class OpenCvTemplateRecognizer:
         confidence: float,
     ) -> RecognitionTrace:
         tight_ok = detection.tight_rect is not None and not detection.needs_review and price_value is not None
+        model_candidates = self.price_crnn_candidates_from_tight_crop(detection.tight_crop) if tight_ok else []
+        template_text = price_digits_only(price_value or detection.tight_digits or detection.raw_digits)
+        top_model_text = price_digits_only(model_candidates[0].value) if model_candidates else ""
+        crnn_conflict = bool(top_model_text and template_text and top_model_text != template_text)
+        crnn_agree = bool(top_model_text and template_text and top_model_text == template_text)
         field_type = "price" if tight_ok else "rejected"
         reason = "tight_price_crop" if tight_ok else (detection.rejection_reason or "selected_row_unknown")
+        if crnn_agree:
+            reason = "tight_price_crop_template_crnn_agree"
+            confidence = min(1.0, confidence + 0.05)
+        elif crnn_conflict:
+            reason = "tight_price_crop_template_crnn_conflict"
+        metadata = detection.metadata()
+        metadata.update(
+            {
+                "crop_source": "price_tight_crop" if detection.tight_rect is not None else "",
+                "raw_prediction": detection.raw_digits,
+                "selected_prediction": price_value,
+                "model_candidates": [candidate.value for candidate in model_candidates],
+                "model_candidate_scores": [candidate.score for candidate in model_candidates],
+                "price_crnn_conflict": crnn_conflict,
+                "price_crnn_agree": crnn_agree,
+                "price_search_roi_path": artifact_path_text(self.latest_analysis_artifacts.get("price_search_roi")),
+                "price_tight_crop_path": artifact_path_text(self.latest_analysis_artifacts.get("price_tight_crop")),
+                "price_color_mask_path": artifact_path_text(self.latest_analysis_artifacts.get("price_color_mask")),
+                "price_component_mask_path": artifact_path_text(self.latest_analysis_artifacts.get("price_component_mask")),
+            }
+        )
         return RecognitionTrace(
             field_name="price_meso",
             field_type=field_type,
@@ -2009,10 +2084,11 @@ class OpenCvTemplateRecognizer:
             raw_prediction=detection.raw_digits,
             selection_reason=reason,
             confidence=confidence,
-            needs_review=not tight_ok,
-            crop_rect=detection.tight_rect if tight_ok else detection.search_rect,
-            crop_metadata=detection.metadata(),
+            needs_review=(not tight_ok) or crnn_conflict,
+            crop_rect=detection.tight_rect if detection.tight_rect is not None else detection.search_rect,
+            crop_metadata=metadata,
             template_candidates=[RecognitionCandidate(value=price_value, score=confidence, source="template")],
+            model_candidates=model_candidates,
         )
 
     def req_level_display_traces(

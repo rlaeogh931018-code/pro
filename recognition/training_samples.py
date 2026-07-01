@@ -14,7 +14,7 @@ import numpy as np
 
 from maple_price_tool.config import VisionConfig
 from maple_price_tool.domain import AnalysisResult, RecognitionCandidate, RecognitionTrace, Rect
-from .ctc_decoder import OPTION_VALUE_CHARSET
+from .ctc_decoder import OPTION_VALUE_CHARSET, PRICE_CHARSET
 from .option_classifier import default_option_class_names
 from .preprocessing import stack_line_channels
 
@@ -151,10 +151,32 @@ def semantic_validate_trace(trace: RecognitionTrace, field_type: str, label: str
     if coordinate_system != "full_image":
         return SemanticValidation(False, "coordinate_system_mismatch")
     if field_type == "price":
+        if not str(label or "").strip():
+            return SemanticValidation(False, "price_label_missing")
+        if set(str(label)) - set(PRICE_CHARSET):
+            return SemanticValidation(False, "invalid_price_charset")
         if metadata.get("line_type") not in {"price", ""}:
             return SemanticValidation(False, "price_line_type_mismatch")
-        if not metadata.get("price_tight_rect") and not metadata.get("tight_rect") and not metadata.get("value_crop_rect"):
+        if str(metadata.get("crop_source") or "") not in {"", "price_tight_crop"}:
+            return SemanticValidation(False, "price_crop_source_mismatch")
+        if not metadata.get("price_tight_rect") and not metadata.get("tight_rect"):
             return SemanticValidation(False, "price_tight_crop_missing")
+        crop_width = int(metadata.get("crop_width") or (trace.crop_rect.width if trace.crop_rect else 0) or 0)
+        crop_height = int(metadata.get("crop_height") or (trace.crop_rect.height if trace.crop_rect else 0) or 0)
+        if crop_width > 384:
+            return SemanticValidation(False, "price_crop_too_large")
+        if crop_width < 18 or crop_height < 10:
+            return SemanticValidation(False, "price_crop_too_small")
+        foreground_ratio = float(metadata.get("foreground_ratio") or 0.0)
+        if foreground_ratio and (foreground_ratio <= 0.002 or foreground_ratio >= 0.75):
+            return SemanticValidation(False, "invalid_component_layout")
+        component_count = int(metadata.get("component_count") or 0)
+        if component_count and component_count < 3:
+            return SemanticValidation(False, "invalid_component_layout")
+        if bool(metadata.get("multiple_rows_detected")):
+            return SemanticValidation(False, "multiple_price_rows_detected")
+        if bool(metadata.get("price_crnn_conflict")):
+            return SemanticValidation(False, "price_crnn_conflict")
         return SemanticValidation(True)
     if field_type == "item_metadata":
         return validate_item_metadata_trace(trace, label)
@@ -468,6 +490,11 @@ class TrainingSampleWriter:
     def _save_trace(self, analysis: AnalysisResult, trace: RecognitionTrace, final_values: dict[str, Any]) -> str:
         field_type = trace.field_type or infer_field_type(trace.field_name)
         original_field_type = field_type
+        if field_type == "price":
+            tight_rect = rect_from_metadata(trace.crop_metadata.get("price_tight_rect") or trace.crop_metadata.get("tight_rect"))
+            if tight_rect is not None:
+                trace.crop_rect = tight_rect
+                trace.crop_metadata["crop_source"] = "price_tight_crop"
         if field_type == "rejected":
             if not self.config.save_rejected_samples:
                 raise SkipSample("rejected_disabled")
@@ -533,6 +560,15 @@ class TrainingSampleWriter:
     def _confirmed_label(self, trace: RecognitionTrace, final_values: dict[str, Any], field_type: str) -> str | None:
         metadata = trace.crop_metadata or {}
         if field_type == "price":
+            raw_text = str(final_values.get("price_meso_text") or "").strip()
+            if raw_text:
+                return normalize_training_label(trace.field_name, raw_text, field_type)
+            price_value = final_values.get("price_meso")
+            if price_value not in {None, ""}:
+                try:
+                    return normalize_training_label(trace.field_name, f"{int(str(price_value).replace(',', '')):,}", field_type)
+                except ValueError:
+                    return normalize_training_label(trace.field_name, price_value, field_type)
             return normalize_training_label(trace.field_name, trace.selected_prediction or trace.raw_prediction, field_type)
         if field_type == "item_metadata":
             metadata_key = metadata_key_for_trace(trace)
@@ -564,8 +600,8 @@ class TrainingSampleWriter:
     ) -> str:
         metadata = trace.crop_metadata or {}
         if field_type == "price":
-            final_price = normalize_value_text(str(final_values.get("price_meso") or ""))
-            trace_price = normalize_value_text(str(label or ""))
+            final_price = price_label_digits(final_values.get("price_meso_text") or final_values.get("price_meso") or "")
+            trace_price = price_label_digits(label)
             return "" if not final_price or final_price == trace_price else "trace_field_mismatch"
         if field_type == "item_metadata":
             metadata_key = metadata_key_for_trace(trace)
@@ -629,6 +665,7 @@ class TrainingSampleWriter:
             else [],
             "confidence": trace.confidence,
             "needs_review": label_quality == "rejected",
+            "final_user_label": label if field_type == "price" or original_field_type == "price" else "",
             "was_corrected": bool(trace.crop_metadata.get("was_corrected_by_user", False)),
             "source_image_path": str(analysis.image_path),
             "before_image_path": str(analysis.before_image_path) if analysis.before_image_path else "",
@@ -758,6 +795,21 @@ def rect_to_dict(rect: Rect | None) -> dict[str, int] | None:
     if rect is None:
         return None
     return asdict(rect)
+
+
+def rect_from_metadata(value: Any) -> Rect | None:
+    if isinstance(value, Rect):
+        return value
+    if not isinstance(value, dict):
+        return None
+    try:
+        return Rect(int(value["left"]), int(value["top"]), int(value["right"]), int(value["bottom"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def price_label_digits(value: Any) -> str:
+    return re.sub(r"\D", "", str(value or ""))
 
 
 def candidate_to_dict(candidate: RecognitionCandidate) -> dict[str, Any]:
