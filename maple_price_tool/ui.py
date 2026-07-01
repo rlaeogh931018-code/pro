@@ -855,6 +855,7 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
                 "parsed_value": "",
                 "raw_prediction": "",
                 "selected_prediction": "",
+                "legacy_row_prediction": "",
                 "confidence": 0.0,
                 "semantic_validation_status": "",
                 "semantic_validation_reason": "",
@@ -890,6 +891,8 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
             row["raw_prediction"] = str(trace.raw_prediction or "")
         if not row["selected_prediction"]:
             row["selected_prediction"] = str(trace.selected_prediction or "")
+        if not row["legacy_row_prediction"]:
+            row["legacy_row_prediction"] = str(metadata.get("legacy_row_prediction") or "")
         if trace.confidence and float(trace.confidence) > float(row["confidence"]):
             row["confidence"] = float(trace.confidence)
         if not row["semantic_validation_status"]:
@@ -991,6 +994,8 @@ def crop_row_detail(row: dict[str, object]) -> str:
         parts.append(f"validation_reason={row.get('semantic_validation_reason')}")
     if row.get("reason"):
         parts.append(f"reason={row.get('reason')}")
+    if row.get("legacy_row_prediction"):
+        parts.append(f"legacy_row={row.get('legacy_row_prediction')}")
     if row.get("line_text"):
         parts.append(f"text={row.get('line_text')}")
     return " / ".join(parts)

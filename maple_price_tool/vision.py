@@ -352,8 +352,15 @@ class PriceDetectionResult:
 
     def as_tuple(self) -> tuple[int | None, float, str]:
         if self.needs_review:
-            return None, self.confidence, self.raw_digits
-        return self.value, self.confidence, self.raw_digits
+            return None, self.confidence, self.trusted_raw_digits()
+        return self.value, self.confidence, self.trusted_raw_digits()
+
+    def trusted_raw_digits(self) -> str:
+        if self.tight_digits:
+            return self.tight_digits
+        if self.needs_review:
+            return ""
+        return self.raw_digits
 
     def metadata(self) -> dict[str, object]:
         rect = self.tight_rect or self.search_rect
@@ -371,6 +378,8 @@ class PriceDetectionResult:
             "selected_row_y": self.selected_row_y,
             "detection_method": self.detection_method,
             "crop_quality_score": self.crop_quality_score,
+            "legacy_row_prediction": self.raw_digits,
+            "raw_prediction_source": "price_tight_crop" if self.tight_digits else "legacy_row_scan",
             "tight_digits": self.tight_digits,
             "tight_digit_confidence": self.tight_digit_confidence,
             "needs_review": self.needs_review,
@@ -2050,7 +2059,8 @@ class OpenCvTemplateRecognizer:
     ) -> RecognitionTrace:
         tight_ok = detection.tight_rect is not None and not detection.needs_review and price_value is not None
         model_candidates = self.price_crnn_candidates_from_tight_crop(detection.tight_crop) if tight_ok else []
-        template_text = price_digits_only(price_value or detection.tight_digits or detection.raw_digits)
+        trusted_raw = detection.trusted_raw_digits()
+        template_text = price_digits_only(price_value or trusted_raw)
         top_model_text = price_digits_only(model_candidates[0].value) if model_candidates else ""
         crnn_conflict = bool(top_model_text and template_text and top_model_text != template_text)
         crnn_agree = bool(top_model_text and template_text and top_model_text == template_text)
@@ -2065,7 +2075,7 @@ class OpenCvTemplateRecognizer:
         metadata.update(
             {
                 "crop_source": "price_tight_crop" if detection.tight_rect is not None else "",
-                "raw_prediction": detection.raw_digits,
+                "raw_prediction": trusted_raw,
                 "selected_prediction": price_value,
                 "model_candidates": [candidate.value for candidate in model_candidates],
                 "model_candidate_scores": [candidate.score for candidate in model_candidates],
@@ -2081,7 +2091,7 @@ class OpenCvTemplateRecognizer:
             field_name="price_meso",
             field_type=field_type,
             selected_prediction=price_value,
-            raw_prediction=detection.raw_digits,
+            raw_prediction=trusted_raw,
             selection_reason=reason,
             confidence=confidence,
             needs_review=(not tight_ok) or crnn_conflict,

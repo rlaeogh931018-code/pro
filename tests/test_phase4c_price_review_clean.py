@@ -77,6 +77,29 @@ def test_price_value_is_rejected_when_tight_crop_digits_do_not_match():
 
     assert result.rejection_reason == "price_tight_crop_value_mismatch"
     assert result.as_tuple()[0] is None
+    assert result.as_tuple()[2] == result.tight_digits
+
+
+def test_rejected_price_trace_keeps_legacy_row_prediction_out_of_raw_prediction():
+    recognizer = OpenCvTemplateRecognizer(VisionConfig(save_debug_images=False))
+    detection = PriceDetectionResult(
+        value=111111111,
+        confidence=0.59,
+        raw_digits="111111111",
+        search_rect=Rect(0, 0, 180, 60),
+        tight_rect=Rect(120, 10, 150, 32),
+        tight_digits="",
+        tight_crop=np.zeros((22, 30, 3), dtype=np.uint8),
+        needs_review=True,
+        rejection_reason="price_tight_crop_value_mismatch",
+    )
+
+    trace = recognizer.price_trace_from_detection(detection, None, 0.59)
+
+    assert trace.raw_prediction == ""
+    assert trace.crop_metadata["raw_prediction"] == ""
+    assert trace.crop_metadata["legacy_row_prediction"] == "111111111"
+    assert trace.crop_metadata["raw_prediction_source"] == "legacy_row_scan"
 
 
 def test_multiple_price_rows_are_rejected():

@@ -74,13 +74,14 @@ def test_rejected_price_preview_does_not_show_raw_prediction_as_value(tmp_path):
             RecognitionTrace(
                 "price_meso",
                 field_type="rejected",
-                raw_prediction="111111111",
+                raw_prediction="",
                 selected_prediction=None,
                 crop_rect=Rect(20, 10, 100, 30),
                 crop_metadata={
                     "line_type": "price",
                     "crop_source": "price_tight_crop",
                     "rejection_reason": "price_tight_crop_value_mismatch",
+                    "legacy_row_prediction": "111111111",
                     "price_search_rect": {"left": 0, "top": 0, "right": 160, "bottom": 40},
                     "price_tight_rect": {"left": 20, "top": 10, "right": 100, "bottom": 30},
                 },
@@ -91,6 +92,8 @@ def test_rejected_price_preview_does_not_show_raw_prediction_as_value(tmp_path):
     row = label_value_crop_rows(analysis)[0]
 
     assert row["value"] == ""
-    assert row["raw_prediction"] == "111111111"
+    assert row["raw_prediction"] == ""
+    assert row["legacy_row_prediction"] == "111111111"
     assert "value=-" in crop_row_title(row)
-    assert "raw=111111111" in crop_row_detail(row)
+    assert "raw=-" in crop_row_detail(row)
+    assert "legacy_row=111111111" in crop_row_detail(row)
