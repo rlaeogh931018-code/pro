@@ -72,7 +72,7 @@ def render_preview(metadata: Path, task: str, limit: int = 100) -> str:
                 cells.append(f"<td>{img_tag(gray)}</td>")
                 cells.append(f"<td>{img_tag(mask)}</td>")
         metadata_html = metadata_block(row)
-        row_class = "bad" if row.get("rejection_reason") else ""
+        row_class = "bad" if is_bad_row(row) else ""
         body.append(
             f"<tr class='{row_class}'>"
             f"<th>{index}</th>"
@@ -149,10 +149,18 @@ def metadata_block(row: dict) -> str:
     keys = [
         "field_name",
         "field_type",
+        "original_field_type",
         "label_quality",
         "review_status",
+        "semantic_validation_status",
+        "semantic_validation_reason",
+        "rejection_reason",
         "capture_pair_id",
         "session_id",
+        "line_text",
+        "parsed_line_text",
+        "parsed_option_key",
+        "parsed_value_text",
         "selected_prediction",
         "raw_prediction",
         "was_corrected",
@@ -160,6 +168,9 @@ def metadata_block(row: dict) -> str:
         "crop_rect",
         "raw_label_rect",
         "trimmed_label_rect",
+        "label_rect",
+        "value_rect",
+        "raw_value_rect",
         "crop_quality_score",
         "touches_left_edge",
         "touches_right_edge",
@@ -167,8 +178,9 @@ def metadata_block(row: dict) -> str:
         "touches_bottom_edge",
         "contains_leading_bullet",
         "contains_value_like_text",
+        "contains_label_text",
+        "value_crop_full_line_like",
         "source_image_path",
-        "rejection_reason",
     ]
     lines = []
     for key in keys:
@@ -177,6 +189,15 @@ def metadata_block(row: dict) -> str:
             continue
         lines.append(f"<div><b>{html.escape(key)}</b>: {html.escape(json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value))}</div>")
     return "".join(lines)
+
+
+def is_bad_row(row: dict) -> bool:
+    return bool(
+        row.get("rejection_reason")
+        or row.get("review_status") == "rejected"
+        or row.get("label_quality") == "rejected"
+        or row.get("semantic_validation_status") == "failed"
+    )
 
 
 HTML_TEMPLATE = """<!doctype html>

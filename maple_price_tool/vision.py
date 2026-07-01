@@ -2468,6 +2468,10 @@ def make_line_training_traces(
     label_crop = build_option_label_crop_rect(line, local_rect, text)
     label_rect = label_crop["trimmed_rect"]
     label_metadata = {
+        "line_text": text,
+        "parsed_line_text": text,
+        "parsed_option_key": key,
+        "selected_prediction": key,
         "raw_label_rect": rect_to_dict(label_crop["raw_rect"]),
         "trimmed_label_rect": rect_to_dict(label_crop["trimmed_rect"]),
         "label_crop_quality": label_crop["quality"],
@@ -2493,14 +2497,20 @@ def make_line_training_traces(
         crop_metadata=label_metadata,
         template_candidates=label_candidates,
     )
-    value_rect = Rect(
-        min(line.rect.right, line.rect.left + local_rect.right),
-        line.rect.top,
-        line.rect.right,
-        line.rect.bottom,
-    )
     label_value = key
     value_text = extract_value_text(text)
+    value_crop = build_option_value_crop_rect(line, label_crop["trimmed_rect"], value_text, text)
+    value_rect = value_crop["trimmed_rect"]
+    value_metadata = {
+        "line_text": text,
+        "parsed_line_text": text,
+        "parsed_option_key": key,
+        "parsed_value_text": value_text,
+        "label_rect": rect_to_dict(label_crop["trimmed_rect"]),
+        "value_rect": rect_to_dict(value_crop["trimmed_rect"]),
+        "raw_value_rect": rect_to_dict(value_crop["raw_rect"]),
+        **value_crop["quality"],
+    }
     return [
         label_trace,
         RecognitionTrace(
@@ -2512,6 +2522,7 @@ def make_line_training_traces(
             selection_reason="template_only",
             confidence=confidence,
             crop_rect=value_rect,
+            crop_metadata=value_metadata,
             template_candidates=[RecognitionCandidate(value=value_text, score=confidence, source="template")],
         ),
     ]
@@ -2575,6 +2586,35 @@ def build_option_label_crop_rect(line: TooltipLine, local_rect: Rect, text: str)
             line.rect.left + local_rect.right,
             line.rect.top + local_rect.bottom,
         )
+    )
+    return {"raw_rect": raw_rect, "trimmed_rect": trimmed_rect, "quality": quality}
+
+
+def build_option_value_crop_rect(line: TooltipLine, label_rect: Rect, value_text: str, line_text: str) -> dict[str, object]:
+    mask = maple_text_mask(line.image)
+    text_bbox = mask_bbox(mask) or Rect(0, 0, line.image.shape[1], line.image.shape[0])
+    spans = column_word_spans(mask)
+    local_label_right = max(0, label_rect.right - line.rect.left)
+    value_start = find_value_start(spans, text_bbox, value_text)
+    if value_start <= local_label_right and spans:
+        value_start = max(local_label_right + 2, spans[-1][0])
+    value_spans = [(left, right) for left, right in spans if right > value_start - 2]
+    if value_spans:
+        raw_left = max(0, min(left for left, _right in value_spans) - 2)
+        raw_right = min(line.image.shape[1], max(right for _left, right in value_spans) + 3)
+    else:
+        raw_left = min(line.image.shape[1] - 1, max(local_label_right + 2, value_start - 2))
+        raw_right = min(line.image.shape[1], max(raw_left + 1, text_bbox.right + 2))
+    raw_top = max(0, text_bbox.top - 3)
+    raw_bottom = min(line.image.shape[0], text_bbox.bottom + 3)
+    raw_rect = Rect(line.rect.left + raw_left, line.rect.top + raw_top, line.rect.left + raw_right, line.rect.top + raw_bottom)
+    trimmed_rect = raw_rect
+    quality = option_value_crop_quality(
+        mask,
+        Rect(raw_left, raw_top, raw_right, raw_bottom),
+        local_label_right=local_label_right,
+        line_text=line_text,
+        value_text=value_text,
     )
     return {"raw_rect": raw_rect, "trimmed_rect": trimmed_rect, "quality": quality}
 
@@ -2649,6 +2689,37 @@ def option_label_crop_quality(mask: np.ndarray, rect: Rect, value_start: int, co
         "contains_value_like_text": contains_value_like_text,
         "contains_leading_bullet": contains_bullet,
         "crop_quality_score": score,
+        "rejection_reason": rejection_reason,
+    }
+
+
+def option_value_crop_quality(mask: np.ndarray, rect: Rect, local_label_right: int, line_text: str, value_text: str) -> dict[str, object]:
+    crop_mask = mask[rect.top : rect.bottom, rect.left : rect.right]
+    foreground = crop_mask > 0
+    foreground_ratio = float(np.count_nonzero(foreground)) / float(foreground.size) if foreground.size else 0.0
+    touches_left = bool(foreground[:, :1].any()) if foreground.size else False
+    touches_right = bool(foreground[:, -1:].any()) if foreground.size else False
+    contains_label_text = rect.left <= local_label_right
+    has_value_digit = any(char.isdigit() for char in str(value_text))
+    full_line_like = bool(line_text and value_text and len(str(line_text).strip()) > len(str(value_text).strip()) + 4 and rect.width > 90)
+    rejection_reason = ""
+    if rect.width < 6 or rect.height < 8:
+        rejection_reason = "value_crop_too_tight"
+    elif foreground_ratio <= 0.001:
+        rejection_reason = "value_crop_too_tight"
+    elif not has_value_digit:
+        rejection_reason = "semantic_label_mismatch"
+    elif contains_label_text or full_line_like:
+        rejection_reason = "option_value_contains_label_text"
+    return {
+        "crop_width": rect.width,
+        "crop_height": rect.height,
+        "foreground_ratio": foreground_ratio,
+        "touches_left_edge": touches_left,
+        "touches_right_edge": touches_right,
+        "contains_label_text": contains_label_text,
+        "value_crop_full_line_like": full_line_like,
+        "crop_quality_score": 0.25 if rejection_reason else 1.0,
         "rejection_reason": rejection_reason,
     }
 

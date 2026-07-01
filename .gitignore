@@ -5,6 +5,7 @@ __pycache__/
 captures/
 debug/
 logs/
+reports/
 datasets/
 models/
 ITEMDB/

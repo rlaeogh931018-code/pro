@@ -14,6 +14,7 @@ from maple_price_tool.config import load_config
 from recognition.ctc_decoder import OPTION_VALUE_CHARSET, PRICE_CHARSET
 from recognition.dataset import SampleRecord, duplicate_hashes, split_saved_training_image
 from recognition.option_classifier import default_option_class_names
+from recognition.training_samples import FIELD_TO_OPTION_KEY, canonical_option_key, is_non_option_line, normalize_value_text
 
 
 TASKS = ("option_label", "option_value", "price", "rejected")
@@ -126,12 +127,70 @@ def collect_quality_issues(records: list[SampleRecord], rows: list[dict], task: 
             issues.append(f"{prefix}: zero_or_empty_price {record.label}")
         if task == "option_value" and not any(char.isdigit() for char in record.label):
             issues.append(f"{prefix}: option_value_without_digit {record.label}")
+        issues.extend(semantic_issues(record, row, prefix, task))
         source_text = str(row.get("source_image_path", "")).strip()
         source = Path(source_text) if source_text else None
         if source is not None and not source.exists():
             issues.append(f"{prefix}: source_image_missing {source}")
         issues.extend(image_issues(record, row, prefix, task))
     return issues
+
+
+def semantic_issues(record: SampleRecord, row: dict, prefix: str, task: str) -> list[str]:
+    issues: list[str] = []
+    semantic_status = str(row.get("semantic_validation_status", ""))
+    semantic_reason = str(row.get("semantic_validation_reason", ""))
+    if task in {"option_label", "option_value"} and record.review_status == "rejected":
+        reason = str(row.get("rejection_reason") or semantic_reason or "rejected_sample")
+        issues.append(f"{prefix}: rejected_sample {reason}")
+    if semantic_status == "failed":
+        issues.append(f"{prefix}: semantic_validation_failed {semantic_reason}")
+    line_text = str(row.get("line_text") or row.get("parsed_line_text") or row.get("original_line_text") or "")
+    if task == "option_label":
+        issues.extend(option_label_semantic_issues(record, row, prefix, line_text))
+    elif task == "option_value":
+        issues.extend(option_value_semantic_issues(record, row, prefix, line_text))
+    return issues
+
+
+def option_label_semantic_issues(record: SampleRecord, row: dict, prefix: str, line_text: str) -> list[str]:
+    issues: list[str] = []
+    if is_non_option_line(line_text):
+        issues.append(f"{prefix}: non_option_line_saved_as_option_label")
+    if bool(row.get("contains_value_like_text")):
+        issues.append(f"{prefix}: option_label_contains_value")
+    parsed_key = canonical_option_key(str(row.get("parsed_option_key") or row.get("option_key") or ""))
+    if parsed_key and parsed_key != record.label:
+        issues.append(f"{prefix}: semantic_label_mismatch parsed={parsed_key} label={record.label}")
+    field_name = str(row.get("field_name") or "")
+    field_key = canonical_option_key(FIELD_TO_OPTION_KEY.get(field_name.removesuffix("_label"), field_name.removesuffix("_label")))
+    if field_key and not field_name.startswith("potential_") and field_key != record.label:
+        issues.append(f"{prefix}: trace_field_mismatch field={field_key} label={record.label}")
+    if record.label == "magic_attack" and bool(row.get("contains_value_like_text")):
+        issues.append(f"{prefix}: magic_attack_label_contains_value")
+    return issues
+
+
+def option_value_semantic_issues(record: SampleRecord, row: dict, prefix: str, line_text: str) -> list[str]:
+    issues: list[str] = []
+    if is_non_option_line(line_text):
+        issues.append(f"{prefix}: non_option_line_saved_as_option_label")
+    if bool(row.get("contains_label_text")):
+        issues.append(f"{prefix}: option_value_contains_label_text")
+    parsed_value = normalize_value_text(str(row.get("parsed_value_text") or row.get("value_text") or ""))
+    if parsed_value and parsed_value != normalize_value_text(record.label):
+        issues.append(f"{prefix}: semantic_label_mismatch parsed_value={parsed_value} label={record.label}")
+    crop_width = int(row.get("crop_width") or crop_rect_width(row.get("crop_rect")) or 0)
+    label_width = len(record.label.replace(",", ""))
+    if crop_width > max(96, label_width * 18 + 30):
+        issues.append(f"{prefix}: option_value_crop_not_tight width={crop_width}")
+    return issues
+
+
+def crop_rect_width(rect: object) -> int:
+    if not isinstance(rect, dict):
+        return 0
+    return max(0, int(rect.get("right", 0)) - int(rect.get("left", 0)))
 
 
 def image_issues(record: SampleRecord, row: dict, prefix: str, task: str) -> list[str]:

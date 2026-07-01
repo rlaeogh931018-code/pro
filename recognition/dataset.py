@@ -41,7 +41,7 @@ class RecognitionJsonlDataset:
         self.class_names = class_names
         self.charset = charset or _charset_for_task(task)
         self.max_width = _max_width_for_task(task)
-        self.label_qualities = label_qualities or {"human_confirmed", "human_confirmed_corrected"}
+        self.label_qualities = label_qualities or {"pending_review", "human_confirmed", "human_confirmed_corrected"}
         self.review_statuses = review_statuses or {"approved"}
         self.records = [
             record

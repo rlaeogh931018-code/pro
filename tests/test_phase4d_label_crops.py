@@ -91,7 +91,7 @@ def test_edge_touching_label_is_rejected():
     assert label_trace.crop_metadata["rejection_reason"] == "label_crop_clipped"
 
 
-def test_option_value_crop_is_unchanged_from_template_split():
+def test_option_value_crop_is_tight_to_value_text():
     line = make_line("INT : +5")
     local_rect = Rect(18, 9, 30, 20)
     traces = make_line_training_traces(line, ("int", 0.9, local_rect), "INT : +5", 0.9, 0)
@@ -99,4 +99,8 @@ def test_option_value_crop_is_unchanged_from_template_split():
     value_trace = traces[1]
 
     assert value_trace.field_type == "option_value"
-    assert value_trace.crop_rect == Rect(line.rect.left + local_rect.right, line.rect.top, line.rect.right, line.rect.bottom)
+    assert value_trace.crop_rect is not None
+    assert value_trace.crop_rect.left > line.rect.left + local_rect.right
+    assert value_trace.crop_rect.width < line.rect.width // 2
+    assert value_trace.crop_metadata["parsed_value_text"] == "+5"
+    assert value_trace.crop_metadata["contains_label_text"] is False

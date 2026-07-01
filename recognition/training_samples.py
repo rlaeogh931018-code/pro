@@ -14,13 +14,15 @@ import numpy as np
 
 from maple_price_tool.config import VisionConfig
 from maple_price_tool.domain import AnalysisResult, RecognitionCandidate, RecognitionTrace, Rect
+from .ctc_decoder import OPTION_VALUE_CHARSET
+from .option_classifier import default_option_class_names
 from .preprocessing import stack_line_channels
 
 
 logger = logging.getLogger(__name__)
 
 CHANNEL_ORDER = ["normalized_residual", "after_grayscale", "foreground_mask"]
-TRAINING_LABEL_QUALITIES = {"human_confirmed", "human_confirmed_corrected"}
+TRAINING_LABEL_QUALITIES = {"pending_review", "human_confirmed", "human_confirmed_corrected"}
 SCALAR_VALUE_FIELDS = {
     "req_level",
     "str_value",
@@ -40,6 +42,37 @@ FIELD_TO_OPTION_KEY = {
     "magic_attack": "magic_attack",
     "upgrade_count": "upgrade_count",
 }
+NON_OPTION_LINE_PATTERNS = (
+    "req lev",
+    "req str",
+    "req dex",
+    "req int",
+    "req luk",
+    "req pop",
+    "reqlevel",
+    "reqstr",
+    "reqdex",
+    "reqint",
+    "reqluk",
+    "reqpop",
+    "장비분류",
+    "장비 분류",
+    "아이템분류",
+    "아이템 분류",
+    "공격속도",
+    "공격 속도",
+    "착용레벨",
+    "착용 레벨",
+    "필요능력치",
+    "필요 능력치",
+    "판매불가",
+    "판매 불가",
+    "교환불가",
+    "교환 불가",
+    "추가크리스탈",
+    "추가 크리스탈",
+)
+MIN_RULE_CONFIDENCE = 0.50
 
 
 @dataclass(frozen=True)
@@ -57,6 +90,12 @@ class SampleSaveSummary:
         return self.option_label_count + self.option_value_count + self.price_count + self.rejected_count
 
 
+@dataclass(frozen=True)
+class SemanticValidation:
+    ok: bool
+    reason: str = ""
+
+
 def normalize_training_label(field_name: str, value: Any, field_type: str) -> str | None:
     if value is None:
         return None
@@ -72,6 +111,104 @@ def normalize_training_label(field_name: str, value: Any, field_type: str) -> st
             return text
         return f"+{text}"
     return text
+
+
+def semantic_validate_trace(trace: RecognitionTrace, field_type: str, label: str) -> SemanticValidation:
+    if field_type == "price":
+        return SemanticValidation(True)
+    metadata = trace.crop_metadata or {}
+    explicit_rejection = str(metadata.get("rejection_reason") or "")
+    if explicit_rejection:
+        return SemanticValidation(False, explicit_rejection)
+    line_text = str(metadata.get("line_text") or metadata.get("parsed_line_text") or metadata.get("original_line_text") or "")
+    parsed_option_key = canonical_option_key(str(metadata.get("parsed_option_key") or metadata.get("option_key") or ""))
+    selected_key = canonical_option_key(str(trace.selected_prediction or ""))
+    expected_key = canonical_option_key(label)
+    if field_type == "option_label":
+        return validate_option_label_trace(trace, label, line_text, parsed_option_key, selected_key, metadata)
+    if field_type == "option_value":
+        return validate_option_value_trace(trace, label, line_text, parsed_option_key, selected_key, metadata)
+    return SemanticValidation(False, "unknown_field_type")
+
+
+def validate_option_label_trace(
+    trace: RecognitionTrace,
+    label: str,
+    line_text: str,
+    parsed_option_key: str,
+    selected_key: str,
+    metadata: dict[str, Any],
+) -> SemanticValidation:
+    class_names = set(default_option_class_names())
+    if label not in class_names or label == "unknown":
+        return SemanticValidation(False, "semantic_label_mismatch")
+    if is_non_option_line(line_text):
+        return SemanticValidation(False, "non_option_line_saved_as_option_label")
+    if bool(metadata.get("contains_value_like_text")):
+        return SemanticValidation(False, "option_label_contains_value")
+    field_key = canonical_option_key(FIELD_TO_OPTION_KEY.get(trace.field_name.removesuffix("_label"), trace.field_name.removesuffix("_label")))
+    if field_key and field_key not in {"potential"} and field_key != label and not trace.field_name.startswith("potential_"):
+        return SemanticValidation(False, "trace_field_mismatch")
+    if parsed_option_key and parsed_option_key != label:
+        return SemanticValidation(False, "semantic_label_mismatch")
+    if selected_key and selected_key != label:
+        return SemanticValidation(False, "semantic_label_mismatch")
+    if trace.confidence and trace.confidence < MIN_RULE_CONFIDENCE:
+        return SemanticValidation(False, "low_rule_confidence")
+    return SemanticValidation(True)
+
+
+def validate_option_value_trace(
+    trace: RecognitionTrace,
+    label: str,
+    line_text: str,
+    parsed_option_key: str,
+    selected_key: str,
+    metadata: dict[str, Any],
+) -> SemanticValidation:
+    if is_non_option_line(line_text):
+        return SemanticValidation(False, "non_option_line_saved_as_option_label")
+    if not label or not any(char.isdigit() for char in label):
+        return SemanticValidation(False, "semantic_label_mismatch")
+    if set(label) - set(OPTION_VALUE_CHARSET):
+        return SemanticValidation(False, "semantic_label_mismatch")
+    if bool(metadata.get("contains_label_text")):
+        return SemanticValidation(False, "option_value_contains_label_text")
+    field_key = canonical_option_key(FIELD_TO_OPTION_KEY.get(trace.field_name, trace.field_name))
+    if parsed_option_key and field_key and not trace.field_name.startswith("potential_") and parsed_option_key != field_key:
+        return SemanticValidation(False, "trace_field_mismatch")
+    parsed_value = normalize_value_text(str(metadata.get("parsed_value_text") or metadata.get("value_text") or ""))
+    if parsed_value and parsed_value != normalize_value_text(label):
+        return SemanticValidation(False, "semantic_label_mismatch")
+    if line_text and parsed_value and not value_text_matches_line(label, line_text):
+        return SemanticValidation(False, "semantic_label_mismatch")
+    return SemanticValidation(True)
+
+
+def is_non_option_line(text: str) -> bool:
+    compact = normalize_for_matching(text)
+    return any(pattern.replace(" ", "") in compact for pattern in NON_OPTION_LINE_PATTERNS)
+
+
+def normalize_for_matching(text: str) -> str:
+    return str(text or "").strip().lower().replace(":", "").replace(" ", "")
+
+
+def normalize_value_text(text: str) -> str:
+    return str(text or "").strip().replace(" ", "")
+
+
+def value_text_matches_line(label: str, line_text: str) -> bool:
+    normalized_label = normalize_value_text(label)
+    tokens = [normalize_value_text(token) for token in str(line_text).replace(":", " ").split()]
+    return normalized_label in tokens or normalize_value_text(extract_numeric_tail(line_text)) == normalized_label
+
+
+def extract_numeric_tail(text: str) -> str:
+    for token in reversed(str(text or "").replace(":", " ").split()):
+        if any(char.isdigit() for char in token):
+            return token
+    return ""
 
 
 def split_user_lines(text: Any) -> list[str]:
@@ -201,6 +338,7 @@ class TrainingSampleWriter:
 
     def _save_trace(self, analysis: AnalysisResult, trace: RecognitionTrace, final_values: dict[str, Any]) -> str:
         field_type = trace.field_type or infer_field_type(trace.field_name)
+        original_field_type = field_type
         if field_type == "rejected":
             if not self.config.save_rejected_samples:
                 raise SkipSample("rejected_disabled")
@@ -212,8 +350,22 @@ class TrainingSampleWriter:
             if label is None:
                 raise SkipSample("missing_label")
             was_corrected = str(trace.selected_prediction or "") not in {"", label}
-            label_quality = "human_confirmed_corrected" if was_corrected else "human_confirmed"
-            target = plural_dir_for_field_type(field_type)
+            validation = semantic_validate_trace(trace, field_type, label)
+            trace.crop_metadata["semantic_validation_status"] = "passed" if validation.ok else "failed"
+            trace.crop_metadata["semantic_validation_reason"] = validation.reason
+            trace.crop_metadata["user_confirmation_status"] = "user_confirmed_record"
+            trace.crop_metadata["was_corrected_by_user"] = was_corrected
+            if validation.ok:
+                label_quality = "pending_review"
+                target = plural_dir_for_field_type(field_type)
+            else:
+                if not self.config.save_rejected_samples:
+                    raise SkipSample(validation.reason)
+                label_quality = "rejected"
+                target = "rejected"
+                field_type = "rejected"
+                trace.crop_metadata["rejection_reason"] = validation.reason
+                trace.crop_metadata["original_field_type"] = original_field_type
         crop = self._build_training_crop(analysis, trace, field_type)
         content_hash = hashlib.sha256(crop.tobytes()).hexdigest()[:12]
         image_dir = self.root / target / "images"
@@ -231,6 +383,7 @@ class TrainingSampleWriter:
             label_quality,
             relative_image_path,
             content_hash,
+            original_field_type,
         )
         if metadata_has_hash(metadata_path, content_hash):
             raise SkipSample("duplicate_content_hash")
@@ -270,6 +423,7 @@ class TrainingSampleWriter:
         label_quality: str,
         relative_image_path: Path,
         content_hash: str,
+        original_field_type: str | None = None,
     ) -> dict[str, Any]:
         return {
             "schema_version": self.config.training_sample_schema_version,
@@ -278,6 +432,7 @@ class TrainingSampleWriter:
             "session_id": analysis.session_id,
             "field_name": trace.field_name,
             "field_type": field_type,
+            "original_field_type": original_field_type or field_type,
             "label": label,
             "label_quality": label_quality,
             "raw_prediction": trace.raw_prediction,
@@ -293,7 +448,7 @@ class TrainingSampleWriter:
             else [],
             "confidence": trace.confidence,
             "needs_review": label_quality == "rejected",
-            "was_corrected": label_quality == "human_confirmed_corrected",
+            "was_corrected": bool(trace.crop_metadata.get("was_corrected_by_user", False)),
             "source_image_path": str(analysis.image_path),
             "before_image_path": str(analysis.before_image_path) if analysis.before_image_path else "",
             "crop_rect": rect_to_dict(trace.crop_rect),
