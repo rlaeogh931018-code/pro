@@ -33,7 +33,7 @@ def confirmed_values() -> dict:
         "magic_attack": 130,
         "upgrade_count": 0,
         "black_crystal": "",
-        "equipment_options": "",
+        "equipment_options": "magic_attack +130",
         "potential": "INT +9%",
     }
 
@@ -64,7 +64,7 @@ def make_analysis(tmp_path: Path, image_path: Path | None = None) -> AnalysisRes
         magic_attack=FieldResult(130, 0.9),
         upgrade_count=FieldResult(0, 0.9),
         black_crystal=FieldResult("", 0.0),
-        equipment_options=FieldResult("", 0.0),
+        equipment_options=FieldResult("magic_attack +130", 0.9),
         potential=FieldResult("INT +9%", 0.7),
         image_path=image_path,
         captured_at=datetime.now(),
@@ -73,9 +73,49 @@ def make_analysis(tmp_path: Path, image_path: Path | None = None) -> AnalysisRes
         session_id="20260701",
         analysis_artifacts={"residual_full": residual_path, "foreground_text_mask_full": mask_path},
         traces=[
-            RecognitionTrace("magic_attack_label", field_type="option_label", line_index=3, selected_prediction="magic_attack", crop_rect=Rect(20, 10, 55, 30), confidence=0.8),
-            RecognitionTrace("magic_attack", field_type="option_value", line_index=3, selected_prediction="+138", crop_rect=Rect(55, 10, 90, 30), confidence=0.61),
-            RecognitionTrace("price_meso", field_type="price", selected_prediction="1,234,567", crop_rect=Rect(20, 45, 100, 65), confidence=0.9),
+            RecognitionTrace(
+                "magic_attack_label",
+                field_type="option_label",
+                line_index=3,
+                selected_prediction="magic_attack",
+                crop_rect=Rect(20, 10, 55, 30),
+                confidence=0.8,
+                crop_metadata={
+                    "line_type": "base_option",
+                    "coordinate_system": "full_image",
+                    "line_text": "magic_attack +130",
+                    "parsed_option_key": "magic_attack",
+                    "parsed_value_text": "+130",
+                },
+            ),
+            RecognitionTrace(
+                "magic_attack",
+                field_type="option_value",
+                line_index=3,
+                selected_prediction="+130",
+                crop_rect=Rect(55, 10, 90, 30),
+                confidence=0.61,
+                crop_metadata={
+                    "line_type": "base_option",
+                    "coordinate_system": "full_image",
+                    "line_text": "magic_attack +130",
+                    "parsed_option_key": "magic_attack",
+                    "parsed_value_text": "+130",
+                },
+            ),
+            RecognitionTrace(
+                "price_meso",
+                field_type="price",
+                selected_prediction="1234567",
+                crop_rect=Rect(20, 45, 100, 65),
+                confidence=0.9,
+                crop_metadata={
+                    "line_type": "price",
+                    "coordinate_system": "full_image",
+                    "price_tight_rect": {"left": 20, "top": 45, "right": 100, "bottom": 65},
+                    "value_crop_rect": {"left": 20, "top": 45, "right": 100, "bottom": 65},
+                },
+            ),
         ],
     )
 

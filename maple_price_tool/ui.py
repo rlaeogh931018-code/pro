@@ -35,7 +35,7 @@ from .domain import AnalysisResult, AppState, CaptureResult, Rect
 from .identity import capture_pair_id_from_path, parse_sidecar, session_id_from_pair_id, sidecar_payload
 from .storage import Storage, final_record_from_analysis
 from .vision import OpenCvTemplateRecognizer
-from recognition.training_samples import SampleSaveSummary, TrainingSampleWriter, apply_line_order_confirmations
+from recognition.training_samples import SampleSaveSummary, TrainingSampleWriter
 
 try:
     from pynput import keyboard
@@ -744,7 +744,6 @@ def format_label_value_preview(analysis: AnalysisResult) -> str:
 
 def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
     traces = deepcopy(analysis.traces)
-    apply_line_order_confirmations(traces, analysis.editable_values())
     rows: dict[object, dict[str, object]] = {}
     for trace in traces:
         if trace.field_type not in {"item_metadata", "option_label", "option_value", "price", "rejected", "ignored", "ui_label", "ui_value"}:
@@ -804,11 +803,16 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
         if metadata.get("review_status"):
             row["review_status"] = str(metadata.get("review_status"))
         if row["raw_line_rect"] is None:
-            row["raw_line_rect"] = rect_from_metadata(metadata.get("raw_line_rect"))
+            row["raw_line_rect"] = rect_from_metadata(metadata.get("raw_line_rect") or metadata.get("price_search_rect") or metadata.get("search_rect"))
         if row["label_crop_rect"] is None:
             row["label_crop_rect"] = rect_from_metadata(metadata.get("label_crop_rect") or metadata.get("trimmed_label_rect"))
         if row["value_crop_rect"] is None:
-            row["value_crop_rect"] = rect_from_metadata(metadata.get("value_crop_rect") or metadata.get("raw_value_rect"))
+            row["value_crop_rect"] = rect_from_metadata(
+                metadata.get("value_crop_rect")
+                or metadata.get("price_tight_rect")
+                or metadata.get("tight_rect")
+                or metadata.get("raw_value_rect")
+            )
         reason = str(metadata.get("rejection_reason") or "")
         if trace.field_type == "ignored" or row["line_type"] == "ignored":
             row["status"] = "ignored"

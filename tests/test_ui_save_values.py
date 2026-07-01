@@ -36,7 +36,7 @@ def test_required_numeric_field_rejects_blank():
         parse_required_int("")
 
 
-def test_label_value_preview_shows_corrected_trace_mapping(tmp_path):
+def test_label_value_preview_keeps_trace_identity_without_line_order_correction(tmp_path):
     analysis = AnalysisResult(
         item_key="98 / hat",
         req_level=FieldResult(98, 0.9),
@@ -93,14 +93,14 @@ def test_label_value_preview_shows_corrected_trace_mapping(tmp_path):
     text = format_label_value_preview(analysis)
 
     assert "line 1: label=int / value=+5" in text
-    assert "line 2: label=attack / value=+71" in text
-    assert "corrected from label:int, value:-71" in text
+    assert "line 2: label=int / value=-71" in text
+    assert "corrected from" not in text
     rows = label_value_crop_rows(analysis)
     assert len(rows) == 2
     assert rows[0]["label_trace"] is not None
     assert rows[0]["value_trace"] is not None
-    assert rows[1]["label"] == "attack"
-    assert rows[1]["value"] == "+71"
+    assert rows[1]["label"] == "int"
+    assert rows[1]["value"] == "-71"
 
 
 def test_crop_rows_include_req_level_and_do_not_mark_template_only_rejected(tmp_path):

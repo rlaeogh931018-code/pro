@@ -143,14 +143,21 @@ def normalize_training_label(field_name: str, value: Any, field_type: str) -> st
 
 
 def semantic_validate_trace(trace: RecognitionTrace, field_type: str, label: str) -> SemanticValidation:
-    if field_type == "price":
-        return SemanticValidation(True)
-    if field_type == "item_metadata":
-        return validate_item_metadata_trace(trace, label)
     metadata = trace.crop_metadata or {}
     explicit_rejection = str(metadata.get("rejection_reason") or "")
     if explicit_rejection:
         return SemanticValidation(False, explicit_rejection)
+    coordinate_system = str(metadata.get("coordinate_system") or "full_image")
+    if coordinate_system != "full_image":
+        return SemanticValidation(False, "coordinate_system_mismatch")
+    if field_type == "price":
+        if metadata.get("line_type") not in {"price", ""}:
+            return SemanticValidation(False, "price_line_type_mismatch")
+        if not metadata.get("price_tight_rect") and not metadata.get("tight_rect") and not metadata.get("value_crop_rect"):
+            return SemanticValidation(False, "price_tight_crop_missing")
+        return SemanticValidation(True)
+    if field_type == "item_metadata":
+        return validate_item_metadata_trace(trace, label)
     line_text = str(metadata.get("line_text") or metadata.get("parsed_line_text") or metadata.get("original_line_text") or "")
     parsed_option_key = canonical_option_key(str(metadata.get("parsed_option_key") or metadata.get("option_key") or ""))
     selected_key = canonical_option_key(str(trace.selected_prediction or ""))
@@ -165,12 +172,21 @@ def semantic_validate_trace(trace: RecognitionTrace, field_type: str, label: str
 def validate_item_metadata_trace(trace: RecognitionTrace, label: str) -> SemanticValidation:
     metadata = trace.crop_metadata or {}
     metadata_key = metadata_key_for_trace(trace)
+    line_text = str(metadata.get("line_text") or metadata.get("raw_line_text") or metadata.get("parsed_line_text") or "")
+    compact_line = normalize_for_matching(line_text)
     if metadata_key not in {"req_level", "equipment_category"}:
         return SemanticValidation(False, "unsupported_metadata_key")
     if metadata_key == "req_level" and not re.fullmatch(r"\d{1,3}", str(label)):
         return SemanticValidation(False, "metadata_label_mismatch")
+    if metadata_key == "req_level":
+        if not ("reqlev" in compact_line or "reqlevel" in compact_line):
+            return SemanticValidation(False, "metadata_line_identity_mismatch")
+        if any(pattern in compact_line for pattern in ("reqstr", "reqdex", "reqint", "reqluk", "reqpop")):
+            return SemanticValidation(False, "metadata_line_identity_mismatch")
     if metadata_key == "equipment_category" and not str(label).strip():
         return SemanticValidation(False, "metadata_label_mismatch")
+    if metadata_key == "equipment_category" and not ("장비분류" in line_text or "?λ퉬遺꾨쪟" in line_text or "equipment" in compact_line):
+        return SemanticValidation(False, "metadata_line_identity_mismatch")
     if metadata.get("line_type") not in {"metadata_req_level", "metadata_equipment_category"}:
         return SemanticValidation(False, "metadata_line_type_mismatch")
     return SemanticValidation(True)
@@ -228,6 +244,9 @@ def validate_option_value_trace(
         return SemanticValidation(False, "option_value_contains_colon")
     if bool(metadata.get("contains_label_text")):
         return SemanticValidation(False, "option_value_contains_label_text")
+    crop_width = int(metadata.get("crop_width") or (trace.crop_rect.width if trace.crop_rect else 0) or 0)
+    if crop_width > max(96, len(str(label).replace(",", "")) * 18 + 30):
+        return SemanticValidation(False, "option_value_crop_not_tight")
     field_key = canonical_option_key(FIELD_TO_OPTION_KEY.get(trace.field_name, trace.field_name))
     if parsed_option_key and field_key and not trace.field_name.startswith("potential_") and parsed_option_key != field_key and not metadata.get("line_order_corrected"):
         return SemanticValidation(False, "trace_field_mismatch")
@@ -287,6 +306,15 @@ def parse_option_line(text: str) -> dict[str, str] | None:
 
 def canonical_option_key(text: str) -> str:
     compact = text.strip().lower().replace(" ", "")
+    raw = str(text or "")
+    if "magic" in compact and "attack" in compact:
+        return "magic_attack"
+    if "upgrade" in compact or "횟수" in raw or "잛닔" in raw:
+        return "upgrade_count"
+    if "留" in raw and "젰" in raw:
+        return "magic_attack"
+    if "怨" in raw and "꺽" in raw:
+        return "attack"
     aliases = {
         "str": "str",
         "dex": "dex",
@@ -389,7 +417,6 @@ class TrainingSampleWriter:
         skipped_reasons: list[str] = []
         counts = {"item_metadata": 0, "option_label": 0, "option_value": 0, "price": 0, "rejected": 0, "skipped": 0}
         traces = self._confirmed_traces(analysis, final_values)
-        apply_line_order_confirmations(traces, final_values)
         for trace in traces:
             if trace.crop_metadata.get("ui_only") or trace.field_type in {"ui_label", "ui_value"}:
                 counts["skipped"] += 1
@@ -453,6 +480,10 @@ class TrainingSampleWriter:
                 raise SkipSample("missing_label")
             was_corrected = str(trace.selected_prediction or "") not in {"", label}
             validation = semantic_validate_trace(trace, field_type, label)
+            if validation.ok:
+                final_mismatch = self._final_value_mismatch_reason(trace, final_values, field_type, label)
+                if final_mismatch:
+                    validation = SemanticValidation(False, final_mismatch)
             trace.crop_metadata["semantic_validation_status"] = "passed" if validation.ok else "failed"
             trace.crop_metadata["semantic_validation_reason"] = validation.reason
             trace.crop_metadata["user_confirmation_status"] = "user_confirmed_record"
@@ -500,36 +531,68 @@ class TrainingSampleWriter:
         return "rejected" if target == "rejected" else field_type
 
     def _confirmed_label(self, trace: RecognitionTrace, final_values: dict[str, Any], field_type: str) -> str | None:
+        metadata = trace.crop_metadata or {}
+        if field_type == "price":
+            return normalize_training_label(trace.field_name, trace.selected_prediction or trace.raw_prediction, field_type)
         if field_type == "item_metadata":
             metadata_key = metadata_key_for_trace(trace)
             if metadata_key == "req_level":
-                return normalize_training_label(trace.field_name, final_values.get("req_level"), field_type)
+                return normalize_training_label(trace.field_name, metadata.get("parsed_value_text") or trace.selected_prediction, field_type)
             if metadata_key == "equipment_category":
                 return normalize_training_label(
                     trace.field_name,
-                    final_values.get("equipment_category", final_values.get("equipment_type")),
+                    metadata.get("parsed_value_text") or trace.selected_prediction,
                     field_type,
                 )
             return None
         if field_type == "option_label":
-            if trace.field_name.startswith("potential_"):
-                parsed = parse_potential_final_line(trace, final_values)
-                return parsed.get("option_key") if parsed else None
-            if trace.crop_metadata.get("confirmed_option_key"):
-                return str(trace.crop_metadata["confirmed_option_key"])
-            parsed = parse_equipment_final_line(trace, final_values)
-            if parsed:
-                return parsed.get("option_key")
-            return str(trace.selected_prediction or "").strip() or None
+            return str(metadata.get("parsed_option_key") or trace.selected_prediction or "").strip() or None
+        if field_type == "option_value":
+            return normalize_training_label(
+                trace.field_name,
+                metadata.get("parsed_value_text") or trace.selected_prediction or trace.raw_prediction,
+                field_type,
+            )
+        return normalize_training_label(trace.field_name, trace.selected_prediction, field_type)
+
+    def _final_value_mismatch_reason(
+        self,
+        trace: RecognitionTrace,
+        final_values: dict[str, Any],
+        field_type: str,
+        label: str,
+    ) -> str:
+        metadata = trace.crop_metadata or {}
+        if field_type == "price":
+            final_price = normalize_value_text(str(final_values.get("price_meso") or ""))
+            trace_price = normalize_value_text(str(label or ""))
+            return "" if not final_price or final_price == trace_price else "trace_field_mismatch"
+        if field_type == "item_metadata":
+            metadata_key = metadata_key_for_trace(trace)
+            final_key = "equipment_type" if metadata_key == "equipment_category" else metadata_key
+            final_text = str(final_values.get(final_key) or "").strip()
+            return "" if not final_text or final_text == str(label).strip() else "trace_field_mismatch"
+        parsed_key = canonical_option_key(str(metadata.get("parsed_option_key") or trace.selected_prediction or ""))
+        parsed_value = normalize_value_text(str(metadata.get("parsed_value_text") or ""))
+        if field_type == "option_value" and not parsed_value:
+            parsed_value = normalize_value_text(str(trace.selected_prediction or ""))
         if trace.field_name.startswith("potential_"):
-            parsed = parse_potential_final_line(trace, final_values)
-            return parsed.get("value_text") if parsed else None
-        if trace.crop_metadata.get("confirmed_value_text"):
-            return str(trace.crop_metadata["confirmed_value_text"])
-        parsed = parse_equipment_final_line(trace, final_values)
-        if parsed:
-            return parsed.get("value_text")
-        return normalize_training_label(trace.field_name, final_values.get(trace.field_name), field_type)
+            parsed_final = parse_potential_final_line(trace, final_values)
+        else:
+            parsed_final = parse_equipment_final_line(trace, final_values)
+        if parsed_final is None:
+            return "manual_mapping_required"
+        if field_type == "option_label":
+            if not parsed_key or parsed_final["option_key"] != parsed_key:
+                return "trace_field_mismatch"
+            if parsed_value and normalize_value_text(parsed_final["value_text"]) != normalize_value_text(parsed_value):
+                return "trace_field_mismatch"
+            return ""
+        if field_type == "option_value":
+            if parsed_key and parsed_final["option_key"] != parsed_key:
+                return "trace_field_mismatch"
+            return "" if normalize_value_text(parsed_final["value_text"]) == normalize_value_text(parsed_value) else "trace_field_mismatch"
+        return ""
 
     def _metadata(
         self,
@@ -570,6 +633,7 @@ class TrainingSampleWriter:
             "source_image_path": str(analysis.image_path),
             "before_image_path": str(analysis.before_image_path) if analysis.before_image_path else "",
             "crop_rect": rect_to_dict(trace.crop_rect),
+            "coordinate_system": trace.crop_metadata.get("coordinate_system", "full_image"),
             "channel_order": CHANNEL_ORDER,
             "content_hash": content_hash,
             "created_at": datetime.now().isoformat(timespec="seconds"),

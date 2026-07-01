@@ -345,6 +345,8 @@ class PriceDetectionResult:
     def metadata(self) -> dict[str, object]:
         rect = self.tight_rect or self.search_rect
         return {
+            "line_type": "price",
+            "coordinate_system": "full_image",
             "crop_width": rect.width,
             "crop_height": rect.height,
             "foreground_ratio": self.foreground_ratio,
@@ -356,8 +358,12 @@ class PriceDetectionResult:
             "needs_review": self.needs_review,
             "rejection_reason": self.rejection_reason,
             "multiple_rows_detected": self.multiple_rows_detected,
+            "price_search_rect": rect_to_dict(self.search_rect),
+            "price_tight_rect": rect_to_dict(self.tight_rect),
             "search_rect": rect_to_dict(self.search_rect),
             "tight_rect": rect_to_dict(self.tight_rect),
+            "raw_line_rect": rect_to_dict(self.search_rect),
+            "value_crop_rect": rect_to_dict(self.tight_rect),
         }
 
 
@@ -1988,6 +1994,7 @@ class OpenCvTemplateRecognizer:
         )
         metadata = {
             "ui_only": True,
+            "coordinate_system": "full_image",
             "line_text": f"REQ LEV : {value}",
             "parsed_option_key": "req_level",
             "parsed_value_text": str(value),
@@ -2052,6 +2059,8 @@ class OpenCvTemplateRecognizer:
         metadata = {
             "metadata_key": "req_level",
             "line_type": "metadata_req_level",
+            "source": "tooltip_line",
+            "coordinate_system": "full_image",
             "raw_line_text": f"REQ LEV : {value}",
             "line_text": f"REQ LEV : {value}",
             "raw_line_rect": rect_to_dict(line_rect),
@@ -2097,6 +2106,8 @@ class OpenCvTemplateRecognizer:
         metadata = {
             "metadata_key": "equipment_category",
             "line_type": "metadata_equipment_category",
+            "source": "tooltip_line",
+            "coordinate_system": "full_image",
             "raw_line_text": f"장비분류 : {value}",
             "line_text": f"장비분류 : {value}",
             "raw_line_rect": rect_to_dict(line_rect),
@@ -2703,6 +2714,8 @@ def make_line_training_traces(
         "line_text": text,
         "parsed_line_text": text,
         "line_type": line_type,
+        "source": "tooltip_line",
+        "coordinate_system": "full_image",
         "raw_line_rect": rect_to_dict(raw_line_rect),
         "parsed_option_key": key,
         "selected_prediction": key,
@@ -2739,6 +2752,8 @@ def make_line_training_traces(
         "line_text": text,
         "parsed_line_text": text,
         "line_type": line_type,
+        "source": "tooltip_line",
+        "coordinate_system": "full_image",
         "raw_line_rect": rect_to_dict(raw_line_rect),
         "parsed_option_key": key,
         "parsed_value_text": value_text,

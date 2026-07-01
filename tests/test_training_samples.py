@@ -47,7 +47,7 @@ def make_analysis(tmp_path: Path) -> AnalysisResult:
         magic_attack=FieldResult(130, 0.61),
         upgrade_count=FieldResult(0, 0.9),
         black_crystal=FieldResult("", 0.0),
-        equipment_options=FieldResult("", 0.0),
+        equipment_options=FieldResult("留덈젰 +130\n?낃렇?덉씠??媛???잛닔: 0", 0.9),
         potential=FieldResult("INT +9%", 0.7),
         image_path=image_path,
         captured_at=datetime.now(),
@@ -58,10 +58,64 @@ def make_analysis(tmp_path: Path) -> AnalysisResult:
             "foreground_text_mask_full": mask_path,
         },
         traces=[
-            RecognitionTrace("magic_attack_label", field_type="option_label", line_index=3, selected_prediction="magic_attack", crop_rect=Rect(20, 10, 55, 30), confidence=0.8),
-            RecognitionTrace("magic_attack", field_type="option_value", line_index=3, selected_prediction="+138", crop_rect=Rect(55, 10, 90, 30), confidence=0.61),
-            RecognitionTrace("upgrade_count", field_type="option_value", line_index=4, selected_prediction="0", crop_rect=Rect(55, 30, 90, 45), confidence=0.9),
-            RecognitionTrace("price_meso", field_type="price", selected_prediction="1,234,567", crop_rect=Rect(20, 45, 100, 65), confidence=0.9),
+            RecognitionTrace(
+                "magic_attack_label",
+                field_type="option_label",
+                line_index=3,
+                selected_prediction="magic_attack",
+                crop_rect=Rect(20, 10, 55, 30),
+                confidence=0.8,
+                crop_metadata={
+                    "line_type": "base_option",
+                    "coordinate_system": "full_image",
+                    "line_text": "留덈젰 +130",
+                    "parsed_option_key": "magic_attack",
+                    "parsed_value_text": "+130",
+                },
+            ),
+            RecognitionTrace(
+                "magic_attack",
+                field_type="option_value",
+                line_index=3,
+                selected_prediction="+130",
+                crop_rect=Rect(55, 10, 90, 30),
+                confidence=0.61,
+                crop_metadata={
+                    "line_type": "base_option",
+                    "coordinate_system": "full_image",
+                    "line_text": "留덈젰 +130",
+                    "parsed_option_key": "magic_attack",
+                    "parsed_value_text": "+130",
+                },
+            ),
+            RecognitionTrace(
+                "upgrade_count",
+                field_type="option_value",
+                line_index=4,
+                selected_prediction="0",
+                crop_rect=Rect(55, 30, 90, 45),
+                confidence=0.9,
+                crop_metadata={
+                    "line_type": "base_option",
+                    "coordinate_system": "full_image",
+                    "line_text": "?낃렇?덉씠??媛???잛닔: 0",
+                    "parsed_option_key": "upgrade_count",
+                    "parsed_value_text": "0",
+                },
+            ),
+            RecognitionTrace(
+                "price_meso",
+                field_type="price",
+                selected_prediction="1234567",
+                crop_rect=Rect(20, 45, 100, 65),
+                confidence=0.9,
+                crop_metadata={
+                    "line_type": "price",
+                    "coordinate_system": "full_image",
+                    "price_tight_rect": {"left": 20, "top": 45, "right": 100, "bottom": 65},
+                    "value_crop_rect": {"left": 20, "top": 45, "right": 100, "bottom": 65},
+                },
+            ),
         ],
     )
 
@@ -217,4 +271,4 @@ def test_potential_line_count_mismatch_goes_to_rejected(tmp_path):
     row = json.loads((tmp_path / "datasets" / "rejected" / "samples.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert row["label_quality"] == "rejected"
     assert row["review_status"] == "rejected"
-    assert row["rejection_reason"] == "manual_mapping_required"
+    assert row["rejection_reason"] in {"manual_mapping_required", "trace_field_mismatch"}

@@ -212,7 +212,7 @@ def test_full_option_value_line_is_rejected_but_tight_value_is_saved(tmp_path):
     assert row["semantic_validation_status"] == "passed"
 
 
-def test_line_order_confirmation_corrects_misclassified_attack_line(tmp_path):
+def test_line_order_confirmation_does_not_override_trace_identity(tmp_path):
     traces = [
         RecognitionTrace(
             "int_value_label",
@@ -260,8 +260,9 @@ def test_line_order_confirmation_corrects_misclassified_attack_line(tmp_path):
         values,
     )
 
-    assert summary.option_label_count == 2
-    assert summary.option_value_count == 2
+    assert summary.option_label_count == 1
+    assert summary.option_value_count == 1
+    assert summary.rejected_count == 2
     label_rows = [
         json.loads(line)
         for line in (tmp_path / "datasets" / "option_labels" / "samples.jsonl").read_text(encoding="utf-8").splitlines()
@@ -270,12 +271,13 @@ def test_line_order_confirmation_corrects_misclassified_attack_line(tmp_path):
         json.loads(line)
         for line in (tmp_path / "datasets" / "option_values" / "samples.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    attack_label = next(row for row in label_rows if row["label"] == "attack")
-    attack_value = next(row for row in value_rows if row["label"] == "+71")
-    assert attack_label["line_order_corrected"] is True
-    assert attack_label["original_parsed_option_key"] == "int"
-    assert attack_value["line_order_corrected"] is True
-    assert attack_value["original_parsed_value_text"] == "-71"
+    rejected_rows = [
+        json.loads(line)
+        for line in (tmp_path / "datasets" / "rejected" / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["label"] for row in label_rows] == ["int"]
+    assert [row["label"] for row in value_rows] == ["+5"]
+    assert all(row["rejection_reason"] == "trace_field_mismatch" for row in rejected_rows)
 
 
 def test_semantic_validation_rejects_label_delimiters_and_sign_only_values():
@@ -329,6 +331,62 @@ def test_phase4h_validation_rejects_value_bleed_and_label_text():
     assert semantic_validate_trace(label_value, "option_label", "attack").reason == "label_contains_value"
     assert semantic_validate_trace(value_label_text, "option_value", "+122").reason == "option_value_contains_label_text"
     assert semantic_validate_trace(value_colon, "option_value", "+4").reason == "option_value_contains_colon"
+
+
+def test_phase4i_metadata_requires_true_req_level_line_identity():
+    req_str_as_level = RecognitionTrace(
+        "req_level",
+        field_type="item_metadata",
+        selected_prediction="0",
+        crop_rect=Rect(50, 10, 70, 25),
+        crop_metadata={
+            "metadata_key": "req_level",
+            "line_type": "metadata_req_level",
+            "coordinate_system": "full_image",
+            "line_text": "REQ STR : 0",
+        },
+    )
+
+    validation = semantic_validate_trace(req_str_as_level, "item_metadata", "0")
+
+    assert validation.ok is False
+    assert validation.reason == "metadata_line_identity_mismatch"
+
+
+def test_phase4i_rejects_non_full_image_coordinate_system():
+    tooltip_relative = RecognitionTrace(
+        "int_value",
+        field_type="option_value",
+        selected_prediction="+5",
+        crop_rect=Rect(10, 10, 30, 25),
+        crop_metadata={
+            "line_type": "base_option",
+            "coordinate_system": "tooltip_relative",
+            "line_text": "INT +5",
+            "parsed_option_key": "int",
+            "parsed_value_text": "+5",
+        },
+    )
+
+    validation = semantic_validate_trace(tooltip_relative, "option_value", "+5")
+
+    assert validation.ok is False
+    assert validation.reason == "coordinate_system_mismatch"
+
+
+def test_phase4i_price_requires_tight_crop_metadata():
+    price_without_tight_crop = RecognitionTrace(
+        "price_meso",
+        field_type="price",
+        selected_prediction="1234567",
+        crop_rect=Rect(10, 10, 90, 25),
+        crop_metadata={"line_type": "price", "coordinate_system": "full_image"},
+    )
+
+    validation = semantic_validate_trace(price_without_tight_crop, "price", "1234567")
+
+    assert validation.ok is False
+    assert validation.reason == "price_tight_crop_missing"
 
 
 def test_default_dataset_loader_requires_approved_even_for_human_confirmed(tmp_path):

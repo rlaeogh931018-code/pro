@@ -136,6 +136,14 @@ def collect_quality_issues(records: list[SampleRecord], rows: list[dict], task: 
             issues.append(f"{prefix}: invalid_price_format {record.label}")
         if task == "price" and record.label.replace(",", "").lstrip("0") == "":
             issues.append(f"{prefix}: zero_or_empty_price {record.label}")
+        coordinate_system = str(row.get("coordinate_system") or "full_image")
+        if coordinate_system != "full_image":
+            issues.append(f"{prefix}: coordinate_system_mismatch {coordinate_system}")
+        if task == "price":
+            if str(row.get("line_type") or "") != "price":
+                issues.append(f"{prefix}: price_line_type_mismatch")
+            if not row.get("price_tight_rect") and not row.get("tight_rect") and not row.get("value_crop_rect"):
+                issues.append(f"{prefix}: price_tight_crop_missing")
         if task == "option_value" and not any(char.isdigit() for char in record.label):
             issues.append(f"{prefix}: option_value_without_digit {record.label}")
         issues.extend(semantic_issues(record, row, prefix, task))
