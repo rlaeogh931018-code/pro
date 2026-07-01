@@ -788,7 +788,10 @@ class OpenCvTemplateRecognizer:
             image_path=capture.image_path,
             captured_at=capture.captured_at,
             debug_images=debug_images,
-            traces=[self.price_trace_from_detection(price_detection, price[0], price[1])],
+            traces=[
+                *self.req_level_display_traces(image, tooltip, req_level),
+                self.price_trace_from_detection(price_detection, price[0], price[1]),
+            ],
             analysis_artifacts=dict(self.latest_analysis_artifacts),
             before_image_path=capture.before_image_path,
             capture_pair_id=capture.capture_pair_id,
@@ -816,6 +819,7 @@ class OpenCvTemplateRecognizer:
         values = line_analysis.values
         confidences = line_analysis.confidences
         traces = list(line_analysis.traces or [])
+        traces.extend(self.req_level_display_traces(image, tooltip, req_level))
         if price_detection is not None:
             traces.append(self.price_trace_from_detection(price_detection, price_value, price[1]))
         elif price_value is not None:
@@ -1041,17 +1045,15 @@ class OpenCvTemplateRecognizer:
                     potential_candidate_lines.append(line)
                 known_potential = self.match_known_potential_line(recognition_line)
                 if known_potential is not None:
-                    text, confidence = known_potential
-                    traces.append(
-                        RecognitionTrace(
-                            field_name=f"potential_{len(potential_lines) + 1}",
-                            field_type="option_value",
-                            line_index=line_index,
-                            selected_prediction=text,
-                            selection_reason="template_only",
-                            confidence=confidence,
-                            crop_rect=line.rect,
-                            template_candidates=[RecognitionCandidate(value=text, score=confidence, source="template")],
+                    key, text, confidence = known_potential
+                    traces.extend(
+                        make_line_training_traces(
+                            line,
+                            (key, confidence, Rect(0, 0, 1, line.image.shape[0])),
+                            text,
+                            confidence,
+                            line_index,
+                            potential_index=len(potential_lines) + 1,
                         )
                     )
                     potential_lines.append(text)
@@ -1178,7 +1180,7 @@ class OpenCvTemplateRecognizer:
                 return True
         return False
 
-    def match_known_potential_line(self, line: np.ndarray) -> tuple[str, float] | None:
+    def match_known_potential_line(self, line: np.ndarray) -> tuple[str, str, float] | None:
         gray = normalize_template_matching_image(line)
         best_value: object | None = None
         best_score = 0.0
@@ -1194,7 +1196,11 @@ class OpenCvTemplateRecognizer:
                     best_score = float(max_val)
         if best_value is None or best_score < 0.72:
             return None
-        return str(best_value), best_score
+        text = str(best_value)
+        key = option_key_from_line_text(text)
+        if key is None:
+            return None
+        return key, text, best_score
 
     def match_potential_patterns_in_rect(
         self,
@@ -1959,6 +1965,73 @@ class OpenCvTemplateRecognizer:
             template_candidates=[RecognitionCandidate(value=price_value, score=confidence, source="template")],
         )
 
+    def req_level_display_traces(
+        self,
+        image: np.ndarray,
+        tooltip: Rect,
+        req_level: tuple[int | None, float, str],
+    ) -> list[RecognitionTrace]:
+        value, confidence, raw_digits = req_level
+        if value is None:
+            return []
+        template = self.label_templates.get("req_level")
+        if template is None:
+            return []
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        roi = crop_rect(gray, tooltip)
+        best: tuple[int, float, Rect] | None = None
+        upper_limit = tooltip.top + max(80, int(tooltip.height * 0.40))
+        for adjusted_template in scaled_label_templates(template, max(12, roi.shape[0])):
+            if roi.shape[0] < adjusted_template.shape[0] or roi.shape[1] < adjusted_template.shape[1]:
+                continue
+            result = cv2.matchTemplate(roi, adjusted_template, cv2.TM_CCOEFF_NORMED)
+            h, w = adjusted_template.shape[:2]
+            ys, xs = np.where(result >= 0.42)
+            for y, x in zip(ys, xs):
+                rect = Rect(tooltip.left + int(x), tooltip.top + int(y), tooltip.left + int(x) + w, tooltip.top + int(y) + h)
+                if rect.top > upper_limit:
+                    continue
+                score = float(result[int(y), int(x)])
+                if best is None or rect.top < best[0] or (rect.top == best[0] and score > best[1]):
+                    best = (rect.top, score, rect)
+        if best is None:
+            return []
+        _top, score, label_rect = best
+        value_rect = Rect(label_rect.right, label_rect.top - 4, label_rect.right + 95, label_rect.bottom + 4).clamp_within(
+            Rect(0, 0, image.shape[1], image.shape[0])
+        )
+        metadata = {
+            "ui_only": True,
+            "line_text": f"REQ LEV : {value}",
+            "parsed_option_key": "req_level",
+            "parsed_value_text": str(value),
+            "raw_prediction": raw_digits,
+        }
+        return [
+            RecognitionTrace(
+                field_name="req_level_label",
+                field_type="ui_label",
+                selected_prediction="req_level",
+                raw_prediction="REQ LEV",
+                selection_reason="req_level_template",
+                confidence=min(confidence, score),
+                crop_rect=label_rect,
+                crop_metadata=metadata,
+                template_candidates=[RecognitionCandidate(value="req_level", score=score, source="template")],
+            ),
+            RecognitionTrace(
+                field_name="req_level",
+                field_type="ui_value",
+                selected_prediction=str(value),
+                raw_prediction=raw_digits,
+                selection_reason="req_level_digits",
+                confidence=confidence,
+                crop_rect=value_rect,
+                crop_metadata=metadata,
+                template_candidates=[RecognitionCandidate(value=value, score=confidence, source="template")],
+            ),
+        ]
+
     def write_price_debug_images(self, image: np.ndarray, result: PriceDetectionResult) -> dict[str, Path]:
         debug_dir = self.debug_dir / "price"
         debug_dir.mkdir(parents=True, exist_ok=True)
@@ -2566,6 +2639,39 @@ def should_create_option_training_traces(key: str, text: str, value: int | None)
     if key in OPTION_SCALAR_KEYS and key != "upgrade_count" and value == 0:
         return False
     return True
+
+
+def option_key_from_line_text(text: str) -> str | None:
+    value_text = extract_value_text(text)
+    label_text = str(text or "")
+    if value_text:
+        label_text = label_text.rsplit(value_text, 1)[0]
+    compact = label_text.strip().lower().replace(":", "").replace(" ", "")
+    aliases = {
+        "str": "str",
+        "dex": "dex",
+        "int": "int",
+        "luk": "luk",
+        "공격력": "attack",
+        "마력": "magic_attack",
+        "공격": "attack",
+        "magicattack": "magic_attack",
+        "allstat": "all_stat",
+        "올스탯": "all_stat",
+        "maxhp": "maxhp",
+        "maxmp": "maxmp",
+    }
+    if compact in aliases:
+        return aliases[compact]
+    if "마력" in label_text:
+        return "magic_attack"
+    if "공격" in label_text:
+        return "attack"
+    if "방어" in label_text and "무시" in label_text:
+        return "ignore_defense"
+    if "보스" in label_text:
+        return "boss_damage"
+    return None
 
 
 def is_non_extractable_requirement_text(text: str) -> bool:

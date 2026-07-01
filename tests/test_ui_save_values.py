@@ -90,3 +90,59 @@ def test_label_value_preview_shows_corrected_trace_mapping(tmp_path):
     assert rows[0]["value_trace"] is not None
     assert rows[1]["label"] == "attack"
     assert rows[1]["value"] == "+71"
+
+
+def test_crop_rows_include_req_level_and_do_not_mark_template_only_rejected(tmp_path):
+    analysis = AnalysisResult(
+        item_key="98 / hat",
+        req_level=FieldResult(98, 0.9),
+        equipment_type=FieldResult("hat", 0.9),
+        price_meso=FieldResult(11111111, 0.9),
+        str_value=FieldResult(0, 0.0),
+        dex_value=FieldResult(0, 0.0),
+        int_value=FieldResult(0, 0.0),
+        luk_value=FieldResult(0, 0.0),
+        attack=FieldResult(0, 0.0),
+        magic_attack=FieldResult(0, 0.0),
+        upgrade_count=FieldResult(0, 0.0),
+        black_crystal=FieldResult("", 0.0),
+        equipment_options=FieldResult("", 0.0),
+        potential=FieldResult("INT +9%", 0.8),
+        image_path=tmp_path / "after.png",
+        captured_at=datetime.now(),
+        traces=[
+            RecognitionTrace(
+                "req_level_label",
+                field_type="ui_label",
+                selected_prediction="req_level",
+                raw_prediction="REQ LEV",
+                crop_rect=Rect(0, 0, 30, 10),
+                crop_metadata={"ui_only": True, "line_text": "REQ LEV : 98", "parsed_option_key": "req_level"},
+            ),
+            RecognitionTrace(
+                "req_level",
+                field_type="ui_value",
+                selected_prediction="98",
+                crop_rect=Rect(35, 0, 55, 10),
+                crop_metadata={"ui_only": True, "line_text": "REQ LEV : 98", "parsed_value_text": "98"},
+            ),
+            RecognitionTrace(
+                "potential_1",
+                field_type="option_value",
+                line_index=7,
+                selected_prediction="+9%",
+                selection_reason="template_only",
+                crop_rect=Rect(10, 10, 40, 20),
+                crop_metadata={"line_text": "INT +9%", "parsed_option_key": "int", "parsed_value_text": "+9%"},
+            ),
+        ],
+    )
+
+    rows = label_value_crop_rows(analysis)
+    req_row = next(row for row in rows if row["sort_key"] == "req_level")
+    potential_row = next(row for row in rows if row["line_index"] == 7)
+
+    assert req_row["label_trace"] is not None
+    assert req_row["value_trace"] is not None
+    assert req_row["value"] == "98"
+    assert potential_row["status"] == "ok"

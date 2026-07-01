@@ -362,6 +362,10 @@ class TrainingSampleWriter:
         traces = self._confirmed_traces(analysis, final_values)
         apply_line_order_confirmations(traces, final_values)
         for trace in traces:
+            if trace.crop_metadata.get("ui_only") or trace.field_type in {"ui_label", "ui_value"}:
+                counts["skipped"] += 1
+                skipped_reasons.append("ui_only")
+                continue
             try:
                 saved_type = self._save_trace(analysis, trace, final_values)
                 counts[saved_type] += 1

@@ -738,9 +738,9 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
     apply_line_order_confirmations(traces, analysis.editable_values())
     rows: dict[object, dict[str, object]] = {}
     for trace in traces:
-        if trace.field_type not in {"option_label", "option_value", "rejected"}:
+        if trace.field_type not in {"option_label", "option_value", "rejected", "ui_label", "ui_value"}:
             continue
-        key = trace.line_index if trace.line_index is not None else trace.field_name
+        key = crop_row_key(trace)
         row = rows.setdefault(
             key,
             {
@@ -763,7 +763,7 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
             row["line_text"] = line_text
         if not row["field_name"]:
             row["field_name"] = trace.field_name
-        reason = str(metadata.get("rejection_reason") or trace.selection_reason or "")
+        reason = str(metadata.get("rejection_reason") or "")
         if trace.field_type == "rejected" or reason:
             row["status"] = "rejected"
             row["reason"] = reason or "rejected"
@@ -779,13 +779,19 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
                 note_parts.append(f"value:{original_value}")
             if note_parts:
                 row["notes"].append("corrected from " + ", ".join(note_parts))
-        if trace.field_name.endswith("_label") or trace.field_type == "option_label":
+        if trace.field_name.endswith("_label") or trace.field_type in {"option_label", "ui_label"}:
             row["label"] = display_label_for_trace(trace)
             row["label_trace"] = trace
-        elif trace.field_type == "option_value" or trace.field_type == "rejected":
+        elif trace.field_type in {"option_value", "ui_value"} or trace.field_type == "rejected":
             row["value"] = display_value_for_trace(trace)
             row["value_trace"] = trace
     return [rows[key] for key in sorted(rows, key=sort_preview_row_key)]
+
+
+def crop_row_key(trace) -> object:
+    if trace.field_name in {"req_level", "req_level_label"}:
+        return "req_level"
+    return trace.line_index if trace.line_index is not None else trace.field_name
 
 
 def crop_row_title(row: dict[str, object]) -> str:
