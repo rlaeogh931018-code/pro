@@ -258,6 +258,30 @@ OPTION_SCALAR_KEYS = {
     "upgrade_count",
 }
 
+NON_EXTRACTABLE_REQUIREMENT_PATTERNS = (
+    "req str",
+    "req dex",
+    "req int",
+    "req luk",
+    "req pop",
+    "item lev",
+    "item level",
+    "초보자",
+    "전사",
+    "마법사",
+    "궁수",
+    "도적",
+    "해적",
+    "beginner",
+    "warrior",
+    "magician",
+    "mage",
+    "bowman",
+    "archer",
+    "thief",
+    "pirate",
+)
+
 AUCTION_ROW_CENTERS = [136, 208, 280, 352, 424, 496, 568, 640]
 
 
@@ -1059,18 +1083,22 @@ class OpenCvTemplateRecognizer:
 
             if option_match:
                 text, value, confidence = self.format_option_line(line.image, option_match)
-                traces.extend(make_line_training_traces(line, option_match, text, confidence, line_index))
                 key = option_match[0]
                 if value is None or (key in OPTION_SCALAR_KEYS and value == 0):
                     known_option = self.match_known_option_line(recognition_line)
                     if known_option is not None:
                         key, text, value, confidence = known_option
+                        option_match = (key, confidence, option_match[2])
+                if is_non_extractable_requirement_text(text):
+                    continue
                 if key in OPTION_SCALAR_KEYS and key != "upgrade_count" and value == 0:
                     continue
                 if value is None and key != "slip_prevention":
                     if key in {"physical_defense", "magic_defense"}:
                         seen_option_keys.add(key)
                     continue
+                if should_create_option_training_traces(key, text, value):
+                    traces.extend(make_line_training_traces(line, option_match, text, confidence, line_index))
                 if text:
                     option_lines.append(text)
                     raw_lines.append(text)
@@ -2526,6 +2554,27 @@ def make_line_training_traces(
             template_candidates=[RecognitionCandidate(value=value_text, score=confidence, source="template")],
         ),
     ]
+
+
+def should_create_option_training_traces(key: str, text: str, value: int | None) -> bool:
+    if key in {"attack_speed"}:
+        return False
+    if is_non_extractable_requirement_text(text):
+        return False
+    if value is None:
+        return False
+    if key in OPTION_SCALAR_KEYS and key != "upgrade_count" and value == 0:
+        return False
+    return True
+
+
+def is_non_extractable_requirement_text(text: str) -> bool:
+    compact = normalize_requirement_text(text)
+    return any(pattern.replace(" ", "") in compact for pattern in NON_EXTRACTABLE_REQUIREMENT_PATTERNS)
+
+
+def normalize_requirement_text(text: str) -> str:
+    return str(text or "").strip().lower().replace(":", "").replace(" ", "")
 
 
 def extract_value_text(text: str) -> str:

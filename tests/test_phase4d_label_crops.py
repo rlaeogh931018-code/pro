@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from maple_price_tool.domain import Rect
-from maple_price_tool.vision import TooltipLine, make_line_training_traces
+from maple_price_tool.vision import TooltipLine, make_line_training_traces, should_create_option_training_traces
 
 
 def make_line(text: str, origin_x: int = 100, origin_y: int = 100, draw_x: int = 8) -> TooltipLine:
@@ -133,3 +133,17 @@ def test_colon_split_keeps_label_and_value_separate(text, key, value):
     assert value_trace.crop_rect is not None
     assert label_trace.crop_rect is not None
     assert value_trace.crop_rect.left > label_trace.crop_rect.right
+
+
+@pytest.mark.parametrize(
+    ("key", "text", "value"),
+    [
+        ("int", "REQ STR : 0", 0),
+        ("int", "REQ INT : 285", 285),
+        ("int", "ITEM LEV : 3", 3),
+        ("attack_speed", "공격속도", None),
+        ("int", "초보자 전사 마법사 궁수 도적 해적", None),
+    ],
+)
+def test_requirement_and_job_lines_do_not_create_option_training_traces(key, text, value):
+    assert should_create_option_training_traces(key, text, value) is False

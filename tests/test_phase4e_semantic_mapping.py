@@ -92,6 +92,23 @@ def test_attack_speed_crop_saved_as_int_is_rejected(tmp_path):
     assert not (tmp_path / "datasets" / "option_labels" / "samples.jsonl").exists()
 
 
+def test_req_stat_item_level_and_job_lines_are_rejected(tmp_path):
+    for line_text in ["REQ INT : 285", "ITEM LEV : 3", "초보자 전사 마법사 궁수 도적 해적"]:
+        trace = RecognitionTrace(
+            "int_value_label",
+            field_type="option_label",
+            line_index=1,
+            selected_prediction="int",
+            crop_rect=Rect(20, 10, 70, 30),
+            confidence=0.9,
+            crop_metadata={"line_text": line_text, "parsed_option_key": "int"},
+        )
+
+        summary = save_one(tmp_path / line_text.replace(" ", "_").replace(":", ""), trace, {"equipment_options": "INT +5"})
+
+        assert summary.rejected_count == 1
+
+
 def test_req_and_equipment_category_are_not_saved_as_option_label(tmp_path):
     traces = [
         RecognitionTrace(
