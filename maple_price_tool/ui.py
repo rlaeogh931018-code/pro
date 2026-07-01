@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSplitter,
     QSpinBox,
     QTextEdit,
     QVBoxLayout,
@@ -43,8 +44,7 @@ except Exception:  # pragma: no cover
 
 
 logger = logging.getLogger(__name__)
-PREVIEW_SIZE = QSize(575, 475)
-CROP_PREVIEW_SIZE = QSize(360, 475)
+PREVIEW_SIZE = QSize(360, 260)
 CROP_THUMB_MAX = QSize(150, 40)
 
 
@@ -141,7 +141,7 @@ class ReviewWindow(QMainWindow):
         self.latest_before_path: Path | None = None
 
         self.setWindowTitle("Maple Auction Review MVP")
-        self.setMinimumSize(660, 900)
+        self.setMinimumSize(1180, 840)
         self._build_menu()
         self._build_ui()
         self.refresh_capture_files()
@@ -187,7 +187,7 @@ class ReviewWindow(QMainWindow):
         self.preview_label.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
         self.preview_scroll = QScrollArea()
         self.preview_scroll.setWidgetResizable(False)
-        self.preview_scroll.setFixedSize(PREVIEW_SIZE.width() + 18, PREVIEW_SIZE.height() + 18)
+        self.preview_scroll.setMinimumSize(PREVIEW_SIZE.width() + 18, PREVIEW_SIZE.height() + 18)
         self.preview_scroll.setWidget(self.preview_label)
 
         self.diff_preview_label = QLabel("Analyze 후 diff 표시")
@@ -196,7 +196,7 @@ class ReviewWindow(QMainWindow):
         self.diff_preview_label.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
         self.diff_preview_scroll = QScrollArea()
         self.diff_preview_scroll.setWidgetResizable(False)
-        self.diff_preview_scroll.setFixedSize(PREVIEW_SIZE.width() + 18, PREVIEW_SIZE.height() + 18)
+        self.diff_preview_scroll.setMinimumSize(PREVIEW_SIZE.width() + 18, PREVIEW_SIZE.height() + 18)
         self.diff_preview_scroll.setWidget(self.diff_preview_label)
 
         self.crop_list_widget = QWidget()
@@ -204,24 +204,9 @@ class ReviewWindow(QMainWindow):
         self.crop_rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.crop_preview_scroll = QScrollArea()
         self.crop_preview_scroll.setWidgetResizable(True)
-        self.crop_preview_scroll.setFixedSize(CROP_PREVIEW_SIZE.width(), CROP_PREVIEW_SIZE.height() + 18)
+        self.crop_preview_scroll.setMinimumWidth(540)
         self.crop_preview_scroll.setWidget(self.crop_list_widget)
         self.clear_crop_preview("Analyze 후 crop 표시")
-
-        preview_row = QHBoxLayout()
-        original_column = QVBoxLayout()
-        original_column.addWidget(QLabel("Original"))
-        original_column.addWidget(self.preview_scroll)
-        diff_column = QVBoxLayout()
-        diff_column.addWidget(QLabel("Analysis DIFF (matching binary)"))
-        diff_column.addWidget(self.diff_preview_scroll)
-        crop_column = QVBoxLayout()
-        crop_column.addWidget(QLabel("Label / Value Crops"))
-        crop_column.addWidget(self.crop_preview_scroll)
-        preview_row.addLayout(original_column)
-        preview_row.addLayout(diff_column)
-        preview_row.addLayout(crop_column)
-        layout.addLayout(preview_row)
 
         form = QFormLayout()
         self.fields: dict[str, QLineEdit | QTextEdit] = {
@@ -236,26 +221,47 @@ class ReviewWindow(QMainWindow):
         form.addRow("가격(메소)", self.fields["price_meso"])
         form.addRow("장비옵션", self.fields["equipment_options"])
         form.addRow("잠재능력", self.fields["potential"])
-        layout.addLayout(form)
 
         self.confidence_label = QLabel("confidence: -")
-        layout.addWidget(self.confidence_label)
         self.training_label = QLabel("training samples: -")
-        layout.addWidget(self.training_label)
-        self.label_value_preview = QTextEdit()
-        self.label_value_preview.setReadOnly(True)
-        self.label_value_preview.setMinimumHeight(96)
-        self.label_value_preview.setPlaceholderText("Analyze 후 label/value 표시")
-        layout.addWidget(self.label_value_preview)
         self.image_label = QLabel("image: -")
-        layout.addWidget(self.image_label)
 
         self.save_button = QPushButton("Save (Enter / Ctrl+S)")
         self.cancel_button = QPushButton("Cancel (Esc)")
         self.save_button.clicked.connect(self.save_current)
         self.cancel_button.clicked.connect(self.cancel_review)
-        layout.addWidget(self.save_button)
-        layout.addWidget(self.cancel_button)
+
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        image_row = QHBoxLayout()
+        before_column = QVBoxLayout()
+        before_column.addWidget(QLabel("Before"))
+        before_column.addWidget(self.preview_scroll)
+        residual_column = QVBoxLayout()
+        residual_column.addWidget(QLabel("Residual"))
+        residual_column.addWidget(self.diff_preview_scroll)
+        image_row.addLayout(before_column)
+        image_row.addLayout(residual_column)
+        left_layout.addLayout(image_row)
+        left_layout.addLayout(form)
+        left_layout.addWidget(self.confidence_label)
+        left_layout.addWidget(self.training_label)
+        left_layout.addWidget(self.image_label)
+        left_layout.addWidget(self.save_button)
+        left_layout.addWidget(self.cancel_button)
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.addWidget(QLabel("Crop Preview"))
+        right_layout.addWidget(self.crop_preview_scroll, 1)
+
+        main_splitter.addWidget(left_panel)
+        main_splitter.addWidget(right_panel)
+        main_splitter.setStretchFactor(0, 1)
+        main_splitter.setStretchFactor(1, 1)
+        main_splitter.setSizes([1, 1])
+        layout.addWidget(main_splitter, 1)
 
         self.setCentralWidget(central)
 
@@ -351,7 +357,7 @@ class ReviewWindow(QMainWindow):
             self.clear_diff_preview("Analyze 후 diff 표시")
             self.clear_crop_preview("Analyze 후 crop 표시")
             return
-        self.set_preview_pixmap(self.preview_label, image_path, "Image load failed")
+        self.show_before_preview_for_capture(image_path)
         self.show_diff_preview_for_capture(image_path)
         self.clear_crop_preview("Analyze 후 crop 표시")
 
@@ -453,9 +459,9 @@ class ReviewWindow(QMainWindow):
             f"potential={analysis.potential.confidence:.2f}"
         )
         self.training_label.setText(format_crop_preview_summary(build_crop_preview_summary(analysis)))
-        self.label_value_preview.setPlainText(format_label_value_preview(analysis))
         self.populate_crop_preview(analysis)
         self.image_label.setText(f"image: {analysis.image_path}")
+        self.show_before_preview_for_capture(analysis.image_path)
         self.show_diff_preview_for_capture(analysis.image_path)
 
     @Slot(str)
@@ -481,6 +487,12 @@ class ReviewWindow(QMainWindow):
         scaled = pixmap.scaled(PREVIEW_SIZE, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         label.setPixmap(scaled)
         label.setFixedSize(PREVIEW_SIZE)
+
+    def show_before_preview_for_capture(self, image_path: Path) -> None:
+        before_path = read_before_sidecar(image_path)
+        preview_path = before_path or image_path
+        failure = "Before load failed" if before_path else "Image load failed"
+        self.set_preview_pixmap(self.preview_label, preview_path, failure)
 
     def clear_diff_preview(self, text: str) -> None:
         self.diff_preview_label.clear()
@@ -617,7 +629,6 @@ class ReviewWindow(QMainWindow):
 
         self.set_status(AppState.IDLE, f"saved record #{record_id}{sample_message}; F7 before / F8 after")
         self.analysis = None
-        self.label_value_preview.clear()
 
     def missing_required_fields(self) -> list[str]:
         required = [
@@ -636,7 +647,6 @@ class ReviewWindow(QMainWindow):
 
     def cancel_review(self) -> None:
         self.analysis = None
-        self.label_value_preview.clear()
         self.clear_crop_preview("Analyze 후 crop 표시")
         self.set_status(AppState.IDLE, "cancelled; select PNG and click Analyze")
 
