@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import pytest
 
 from maple_price_tool.domain import Rect
 from maple_price_tool.vision import TooltipLine, make_line_training_traces
@@ -104,3 +105,31 @@ def test_option_value_crop_is_tight_to_value_text():
     assert value_trace.crop_rect.width < line.rect.width // 2
     assert value_trace.crop_metadata["parsed_value_text"] == "+5"
     assert value_trace.crop_metadata["contains_label_text"] is False
+
+
+@pytest.mark.parametrize(
+    ("text", "key", "value"),
+    [
+        ("MAGIC : +127", "magic_attack", "+127"),
+        ("ATTACK : +5", "attack", "+5"),
+        ("INT : +9%", "int", "+9%"),
+        ("UPGRADE COUNT : 0", "upgrade_count", "0"),
+    ],
+)
+def test_colon_split_keeps_label_and_value_separate(text, key, value):
+    line = make_line(text)
+    traces = make_line_training_traces(line, (key, 0.9, Rect(8, 9, 50, 20)), text, 0.9, 0)
+
+    label_trace, value_trace = traces
+
+    assert label_trace.field_type == "option_label"
+    assert label_trace.crop_metadata["split_reason"].startswith("colon_value_split")
+    assert label_trace.crop_metadata["contains_colon_like_text"] is False
+    assert label_trace.crop_metadata["contains_value_like_text"] is False
+    assert value_trace.field_type == "option_value"
+    assert value_trace.crop_metadata["parsed_value_text"] == value
+    assert value_trace.crop_metadata["contains_label_text"] is False
+    assert value_trace.crop_metadata["contains_colon_like_text"] is False
+    assert value_trace.crop_rect is not None
+    assert label_trace.crop_rect is not None
+    assert value_trace.crop_rect.left > label_trace.crop_rect.right

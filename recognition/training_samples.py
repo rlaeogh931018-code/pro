@@ -55,6 +55,8 @@ NON_OPTION_LINE_PATTERNS = (
     "reqint",
     "reqluk",
     "reqpop",
+    "attack speed",
+    "attackspeed",
     "장비분류",
     "장비 분류",
     "아이템분류",
@@ -143,15 +145,18 @@ def validate_option_label_trace(
     if label not in class_names or label == "unknown":
         return SemanticValidation(False, "semantic_label_mismatch")
     if is_non_option_line(line_text):
-        return SemanticValidation(False, "non_option_line_saved_as_option_label")
-    if bool(metadata.get("contains_value_like_text")):
+        return SemanticValidation(False, "non_option_line")
+    if line_text and not extract_numeric_tail(line_text):
+        return SemanticValidation(False, "non_option_line")
+    if bool(metadata.get("contains_value_like_text")) or bool(metadata.get("contains_colon_like_text")):
         return SemanticValidation(False, "option_label_contains_value")
     field_key = canonical_option_key(FIELD_TO_OPTION_KEY.get(trace.field_name.removesuffix("_label"), trace.field_name.removesuffix("_label")))
-    if field_key and field_key not in {"potential"} and field_key != label and not trace.field_name.startswith("potential_"):
+    line_order_corrected = bool(metadata.get("line_order_corrected"))
+    if field_key and field_key not in {"potential"} and field_key != label and not trace.field_name.startswith("potential_") and not line_order_corrected:
         return SemanticValidation(False, "trace_field_mismatch")
     if parsed_option_key and parsed_option_key != label:
         return SemanticValidation(False, "semantic_label_mismatch")
-    if selected_key and selected_key != label:
+    if selected_key and selected_key != label and not line_order_corrected:
         return SemanticValidation(False, "semantic_label_mismatch")
     if trace.confidence and trace.confidence < MIN_RULE_CONFIDENCE:
         return SemanticValidation(False, "low_rule_confidence")
@@ -167,20 +172,22 @@ def validate_option_value_trace(
     metadata: dict[str, Any],
 ) -> SemanticValidation:
     if is_non_option_line(line_text):
-        return SemanticValidation(False, "non_option_line_saved_as_option_label")
+        return SemanticValidation(False, "non_option_line")
     if not label or not any(char.isdigit() for char in label):
         return SemanticValidation(False, "semantic_label_mismatch")
     if set(label) - set(OPTION_VALUE_CHARSET):
         return SemanticValidation(False, "semantic_label_mismatch")
-    if bool(metadata.get("contains_label_text")):
+    if bool(metadata.get("contains_label_text")) or bool(metadata.get("contains_colon_like_text")):
         return SemanticValidation(False, "option_value_contains_label_text")
+    if bool(metadata.get("value_sign_without_digit")):
+        return SemanticValidation(False, "semantic_label_mismatch")
     field_key = canonical_option_key(FIELD_TO_OPTION_KEY.get(trace.field_name, trace.field_name))
-    if parsed_option_key and field_key and not trace.field_name.startswith("potential_") and parsed_option_key != field_key:
+    if parsed_option_key and field_key and not trace.field_name.startswith("potential_") and parsed_option_key != field_key and not metadata.get("line_order_corrected"):
         return SemanticValidation(False, "trace_field_mismatch")
     parsed_value = normalize_value_text(str(metadata.get("parsed_value_text") or metadata.get("value_text") or ""))
     if parsed_value and parsed_value != normalize_value_text(label):
         return SemanticValidation(False, "semantic_label_mismatch")
-    if line_text and parsed_value and not value_text_matches_line(label, line_text):
+    if line_text and parsed_value and not value_text_matches_line(label, line_text) and not metadata.get("line_order_corrected"):
         return SemanticValidation(False, "semantic_label_mismatch")
     return SemanticValidation(True)
 
@@ -241,11 +248,14 @@ def canonical_option_key(text: str) -> str:
         "올스탯": "all_stat",
         "allstat": "all_stat",
         "공격력": "attack",
+        "공격력": "attack",
         "attack": "attack",
+        "마력": "magic_attack",
         "마력": "magic_attack",
         "magicattack": "magic_attack",
         "업그레이드가능횟수": "upgrade_count",
         "업그레이드가능": "upgrade_count",
+        "업그레이드가능횟수": "upgrade_count",
         "upgradecount": "upgrade_count",
         "업횟": "upgrade_count",
     }
@@ -282,6 +292,44 @@ def parse_equipment_final_line(trace: RecognitionTrace, final_values: dict[str, 
     return None
 
 
+def apply_line_order_confirmations(traces: list[RecognitionTrace], final_values: dict[str, Any]) -> None:
+    parsed_lines = [parsed for line in split_user_lines(final_values.get("equipment_options", "")) if (parsed := parse_option_line(line))]
+    if not parsed_lines:
+        return
+    grouped: dict[int, list[RecognitionTrace]] = {}
+    for trace in traces:
+        if trace.line_index is None or trace.field_name.startswith("potential_"):
+            continue
+        if trace.field_type not in {"option_label", "option_value", "rejected"}:
+            continue
+        metadata = trace.crop_metadata or {}
+        line_text = str(metadata.get("line_text") or metadata.get("parsed_line_text") or "")
+        if is_non_option_line(line_text) or not extract_numeric_tail(line_text):
+            continue
+        grouped.setdefault(trace.line_index, []).append(trace)
+    candidate_indexes = sorted(grouped)
+    if len(candidate_indexes) < 2:
+        return
+    for line_index, parsed in zip(candidate_indexes, parsed_lines):
+        for trace in grouped[line_index]:
+            metadata = trace.crop_metadata
+            original_key = str(metadata.get("parsed_option_key") or trace.selected_prediction or "")
+            original_value = str(metadata.get("parsed_value_text") or trace.selected_prediction or "")
+            confirmed_key = parsed["option_key"]
+            confirmed_value = parsed["value_text"]
+            if original_key and canonical_option_key(original_key) != confirmed_key:
+                metadata["original_parsed_option_key"] = original_key
+                metadata["line_order_corrected"] = True
+            if original_value and normalize_value_text(original_value) != normalize_value_text(confirmed_value):
+                metadata["original_parsed_value_text"] = original_value
+                metadata["line_order_corrected"] = True
+            metadata["confirmed_option_key"] = confirmed_key
+            metadata["confirmed_value_text"] = confirmed_value
+            metadata["confirmed_full_text"] = parsed["full_text"]
+            metadata["parsed_option_key"] = confirmed_key
+            metadata["parsed_value_text"] = confirmed_value
+
+
 class TrainingSampleWriter:
     def __init__(self, config: VisionConfig) -> None:
         self.config = config
@@ -293,7 +341,9 @@ class TrainingSampleWriter:
         errors: list[str] = []
         skipped_reasons: list[str] = []
         counts = {"option_label": 0, "option_value": 0, "price": 0, "rejected": 0, "skipped": 0}
-        for trace in self._confirmed_traces(analysis, final_values):
+        traces = self._confirmed_traces(analysis, final_values)
+        apply_line_order_confirmations(traces, final_values)
+        for trace in traces:
             try:
                 saved_type = self._save_trace(analysis, trace, final_values)
                 counts[saved_type] += 1
@@ -402,6 +452,8 @@ class TrainingSampleWriter:
             if trace.field_name.startswith("potential_"):
                 parsed = parse_potential_final_line(trace, final_values)
                 return parsed.get("option_key") if parsed else None
+            if trace.crop_metadata.get("confirmed_option_key"):
+                return str(trace.crop_metadata["confirmed_option_key"])
             parsed = parse_equipment_final_line(trace, final_values)
             if parsed:
                 return parsed.get("option_key")
@@ -409,6 +461,8 @@ class TrainingSampleWriter:
         if trace.field_name.startswith("potential_"):
             parsed = parse_potential_final_line(trace, final_values)
             return parsed.get("value_text") if parsed else None
+        if trace.crop_metadata.get("confirmed_value_text"):
+            return str(trace.crop_metadata["confirmed_value_text"])
         parsed = parse_equipment_final_line(trace, final_values)
         if parsed:
             return parsed.get("value_text")

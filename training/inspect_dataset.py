@@ -156,15 +156,17 @@ def semantic_issues(record: SampleRecord, row: dict, prefix: str, task: str) -> 
 def option_label_semantic_issues(record: SampleRecord, row: dict, prefix: str, line_text: str) -> list[str]:
     issues: list[str] = []
     if is_non_option_line(line_text):
-        issues.append(f"{prefix}: non_option_line_saved_as_option_label")
-    if bool(row.get("contains_value_like_text")):
+        issues.append(f"{prefix}: non_option_line")
+    if line_text and not any(char.isdigit() for char in line_text):
+        issues.append(f"{prefix}: non_option_line")
+    if bool(row.get("contains_value_like_text")) or bool(row.get("contains_colon_like_text")):
         issues.append(f"{prefix}: option_label_contains_value")
     parsed_key = canonical_option_key(str(row.get("parsed_option_key") or row.get("option_key") or ""))
     if parsed_key and parsed_key != record.label:
         issues.append(f"{prefix}: semantic_label_mismatch parsed={parsed_key} label={record.label}")
     field_name = str(row.get("field_name") or "")
     field_key = canonical_option_key(FIELD_TO_OPTION_KEY.get(field_name.removesuffix("_label"), field_name.removesuffix("_label")))
-    if field_key and not field_name.startswith("potential_") and field_key != record.label:
+    if field_key and not field_name.startswith("potential_") and field_key != record.label and not row.get("line_order_corrected"):
         issues.append(f"{prefix}: trace_field_mismatch field={field_key} label={record.label}")
     if record.label == "magic_attack" and bool(row.get("contains_value_like_text")):
         issues.append(f"{prefix}: magic_attack_label_contains_value")
@@ -174,9 +176,11 @@ def option_label_semantic_issues(record: SampleRecord, row: dict, prefix: str, l
 def option_value_semantic_issues(record: SampleRecord, row: dict, prefix: str, line_text: str) -> list[str]:
     issues: list[str] = []
     if is_non_option_line(line_text):
-        issues.append(f"{prefix}: non_option_line_saved_as_option_label")
-    if bool(row.get("contains_label_text")):
+        issues.append(f"{prefix}: non_option_line")
+    if bool(row.get("contains_label_text")) or bool(row.get("contains_colon_like_text")):
         issues.append(f"{prefix}: option_value_contains_label_text")
+    if bool(row.get("value_sign_without_digit")):
+        issues.append(f"{prefix}: option_value_without_digit {record.label}")
     parsed_value = normalize_value_text(str(row.get("parsed_value_text") or row.get("value_text") or ""))
     if parsed_value and parsed_value != normalize_value_text(record.label):
         issues.append(f"{prefix}: semantic_label_mismatch parsed_value={parsed_value} label={record.label}")

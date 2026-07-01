@@ -178,7 +178,9 @@ def metadata_block(row: dict) -> str:
         "touches_bottom_edge",
         "contains_leading_bullet",
         "contains_value_like_text",
+        "contains_colon_like_text",
         "contains_label_text",
+        "value_sign_without_digit",
         "value_crop_full_line_like",
         "source_image_path",
     ]

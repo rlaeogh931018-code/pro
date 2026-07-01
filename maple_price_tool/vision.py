@@ -2540,13 +2540,14 @@ def build_option_label_crop_rect(line: TooltipLine, local_rect: Rect, text: str)
     text_bbox = mask_bbox(mask) or Rect(0, 0, line.image.shape[1], line.image.shape[0])
     spans = column_word_spans(mask)
     value_text = extract_value_text(text)
-    value_start = find_value_start(spans, text_bbox, value_text)
+    split = find_label_value_split(mask, spans, text_bbox, text, value_text)
+    value_start = split["value_start"]
+    label_right = split["label_right"]
     label_padding_left = 4
-    label_padding_right = 4
     label_padding_y = 3
     raw_left = max(0, text_bbox.left - label_padding_left)
     raw_top = max(0, text_bbox.top - label_padding_y)
-    raw_right = min(line.image.shape[1], max(raw_left + 1, value_start - label_padding_right))
+    raw_right = min(line.image.shape[1], max(raw_left + 1, label_right))
     raw_bottom = min(line.image.shape[0], text_bbox.bottom + label_padding_y)
     raw_rect = Rect(line.rect.left + raw_left, line.rect.top + raw_top, line.rect.left + raw_right, line.rect.top + raw_bottom)
 
@@ -2577,7 +2578,25 @@ def build_option_label_crop_rect(line: TooltipLine, local_rect: Rect, text: str)
         mask,
         Rect(trim_left, raw_top, max(trim_left + 1, trim_right), raw_bottom),
         value_start=value_start,
+        label_right=label_right,
+        colon_x=split["colon_x"],
         contains_bullet=contains_bullet,
+    )
+    quality.update(
+        {
+            "split_reason": split["split_reason"],
+            "split_colon_x": split["colon_x"],
+            "split_value_start": split["value_start"],
+            "split_label_right": split["label_right"],
+            "text_bbox": rect_to_dict(
+                Rect(
+                    line.rect.left + text_bbox.left,
+                    line.rect.top + text_bbox.top,
+                    line.rect.left + text_bbox.right,
+                    line.rect.top + text_bbox.bottom,
+                )
+            ),
+        }
     )
     quality["template_rect"] = rect_to_dict(
         Rect(
@@ -2595,9 +2614,10 @@ def build_option_value_crop_rect(line: TooltipLine, label_rect: Rect, value_text
     text_bbox = mask_bbox(mask) or Rect(0, 0, line.image.shape[1], line.image.shape[0])
     spans = column_word_spans(mask)
     local_label_right = max(0, label_rect.right - line.rect.left)
-    value_start = find_value_start(spans, text_bbox, value_text)
+    split = find_label_value_split(mask, spans, text_bbox, line_text, value_text)
+    value_start = split["value_start"]
     if value_start <= local_label_right and spans:
-        value_start = max(local_label_right + 2, spans[-1][0])
+        value_start = first_span_after(spans, local_label_right) or max(local_label_right + 2, spans[-1][0])
     value_spans = [(left, right) for left, right in spans if right > value_start - 2]
     if value_spans:
         raw_left = max(0, min(left for left, _right in value_spans) - 2)
@@ -2615,6 +2635,15 @@ def build_option_value_crop_rect(line: TooltipLine, label_rect: Rect, value_text
         local_label_right=local_label_right,
         line_text=line_text,
         value_text=value_text,
+        colon_x=split["colon_x"],
+    )
+    quality.update(
+        {
+            "split_reason": split["split_reason"],
+            "split_colon_x": split["colon_x"],
+            "split_value_start": split["value_start"],
+            "split_label_right": split["label_right"],
+        }
     )
     return {"raw_rect": raw_rect, "trimmed_rect": trimmed_rect, "quality": quality}
 
@@ -2652,7 +2681,89 @@ def find_value_start(spans: list[tuple[int, int]], text_bbox: Rect, value_text: 
     return text_bbox.right
 
 
-def option_label_crop_quality(mask: np.ndarray, rect: Rect, value_start: int, contains_bullet: bool) -> dict[str, object]:
+def find_label_value_split(
+    mask: np.ndarray,
+    spans: list[tuple[int, int]],
+    text_bbox: Rect,
+    line_text: str,
+    value_text: str,
+) -> dict[str, object]:
+    value_start = find_value_start(spans, text_bbox, value_text)
+    colon_x = find_colon_candidate_x(mask, spans, value_start, line_text)
+    if colon_x is not None:
+        after_colon = first_span_after(spans, colon_x)
+        if after_colon is not None:
+            value_start = after_colon
+    elif spans and any(char in str(value_text) for char in "+-") and len(spans) >= 2:
+        value_start = spans[-1][0]
+    split_boundary = min(value_start, colon_x if colon_x is not None else value_start)
+    label_right = max(text_bbox.left + 1, split_boundary - 3)
+    split_reason = "colon_value_split" if colon_x is not None else "value_start_split"
+    if label_right <= text_bbox.left + 4:
+        label_right = max(text_bbox.left + 1, value_start - 3)
+        split_reason += "_fallback"
+    return {
+        "colon_x": colon_x,
+        "value_start": value_start,
+        "label_right": label_right,
+        "split_reason": split_reason,
+    }
+
+
+def find_colon_candidate_x(
+    mask: np.ndarray,
+    spans: list[tuple[int, int]],
+    value_start: int,
+    line_text: str,
+) -> int | None:
+    candidates: list[tuple[int, int]] = []
+    for left, right in spans:
+        if right >= value_start:
+            continue
+        width = right - left
+        if width > 5:
+            continue
+        span_mask = mask[:, left:right]
+        rows = np.where((span_mask > 0).sum(axis=1) > 0)[0]
+        height = int(rows[-1] - rows[0] + 1) if len(rows) else 0
+        area = int(np.count_nonzero(span_mask))
+        next_left = first_span_after(spans, right)
+        previous_right = previous_span_right(spans, left)
+        next_gap = next_left - right if next_left is not None else 999
+        previous_gap = left - previous_right if previous_right is not None else 999
+        if area <= 80 and height <= 18 and next_gap <= 14 and previous_gap >= 3:
+            candidates.append((left, right))
+    if candidates:
+        return candidates[-1][0]
+    if ":" in str(line_text) and len(spans) >= 3:
+        return spans[-2][0]
+    return None
+
+
+def first_span_after(spans: list[tuple[int, int]], x: int) -> int | None:
+    for left, right in spans:
+        if left > x:
+            return left
+    return None
+
+
+def previous_span_right(spans: list[tuple[int, int]], x: int) -> int | None:
+    previous: int | None = None
+    for left, right in spans:
+        if right >= x:
+            return previous
+        previous = right
+    return previous
+
+
+def option_label_crop_quality(
+    mask: np.ndarray,
+    rect: Rect,
+    value_start: int,
+    label_right: int,
+    colon_x: int | None,
+    contains_bullet: bool,
+) -> dict[str, object]:
     crop_mask = mask[rect.top : rect.bottom, rect.left : rect.right]
     foreground = crop_mask > 0
     touches_left = bool(foreground[:, :1].any()) if foreground.size else False
@@ -2660,7 +2771,8 @@ def option_label_crop_quality(mask: np.ndarray, rect: Rect, value_start: int, co
     touches_top = bool(foreground[:1, :].any()) if foreground.size else False
     touches_bottom = bool(foreground[-1:, :].any()) if foreground.size else False
     foreground_ratio = float(np.count_nonzero(foreground)) / float(foreground.size) if foreground.size else 0.0
-    contains_value_like_text = rect.right > value_start
+    contains_colon_like_text = colon_x is not None and rect.right > colon_x
+    contains_value_like_text = rect.right > label_right or rect.right > value_start or contains_colon_like_text
     crop_width = rect.width
     crop_height = rect.height
     rejection_reason = ""
@@ -2669,7 +2781,7 @@ def option_label_crop_quality(mask: np.ndarray, rect: Rect, value_start: int, co
     elif touches_left or touches_right or touches_top or touches_bottom:
         rejection_reason = "label_crop_clipped"
     elif contains_value_like_text:
-        rejection_reason = "label_contains_value"
+        rejection_reason = "option_label_contains_value"
     elif foreground_ratio <= 0.005:
         rejection_reason = "label_crop_too_tight"
     score = 1.0
@@ -2687,29 +2799,39 @@ def option_label_crop_quality(mask: np.ndarray, rect: Rect, value_start: int, co
         "touches_bottom_edge": touches_bottom,
         "was_truncated_by_max_width": False,
         "contains_value_like_text": contains_value_like_text,
+        "contains_colon_like_text": contains_colon_like_text,
         "contains_leading_bullet": contains_bullet,
         "crop_quality_score": score,
         "rejection_reason": rejection_reason,
     }
 
 
-def option_value_crop_quality(mask: np.ndarray, rect: Rect, local_label_right: int, line_text: str, value_text: str) -> dict[str, object]:
+def option_value_crop_quality(
+    mask: np.ndarray,
+    rect: Rect,
+    local_label_right: int,
+    line_text: str,
+    value_text: str,
+    colon_x: int | None,
+) -> dict[str, object]:
     crop_mask = mask[rect.top : rect.bottom, rect.left : rect.right]
     foreground = crop_mask > 0
     foreground_ratio = float(np.count_nonzero(foreground)) / float(foreground.size) if foreground.size else 0.0
     touches_left = bool(foreground[:, :1].any()) if foreground.size else False
     touches_right = bool(foreground[:, -1:].any()) if foreground.size else False
     contains_label_text = rect.left <= local_label_right
+    contains_colon_like_text = colon_x is not None and rect.left <= colon_x < rect.right
     has_value_digit = any(char.isdigit() for char in str(value_text))
+    sign_without_digit = str(value_text).strip() in {"+", "-"} or not has_value_digit
     full_line_like = bool(line_text and value_text and len(str(line_text).strip()) > len(str(value_text).strip()) + 4 and rect.width > 90)
     rejection_reason = ""
     if rect.width < 6 or rect.height < 8:
         rejection_reason = "value_crop_too_tight"
     elif foreground_ratio <= 0.001:
         rejection_reason = "value_crop_too_tight"
-    elif not has_value_digit:
+    elif sign_without_digit:
         rejection_reason = "semantic_label_mismatch"
-    elif contains_label_text or full_line_like:
+    elif contains_label_text or contains_colon_like_text or full_line_like:
         rejection_reason = "option_value_contains_label_text"
     return {
         "crop_width": rect.width,
@@ -2718,6 +2840,8 @@ def option_value_crop_quality(mask: np.ndarray, rect: Rect, local_label_right: i
         "touches_left_edge": touches_left,
         "touches_right_edge": touches_right,
         "contains_label_text": contains_label_text,
+        "contains_colon_like_text": contains_colon_like_text,
+        "value_sign_without_digit": sign_without_digit,
         "value_crop_full_line_like": full_line_like,
         "crop_quality_score": 0.25 if rejection_reason else 1.0,
         "rejection_reason": rejection_reason,

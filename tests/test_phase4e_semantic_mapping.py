@@ -11,7 +11,7 @@ from maple_price_tool.config import VisionConfig
 from maple_price_tool.domain import AnalysisResult, FieldResult, RecognitionTrace, Rect
 from recognition.dataset import RecognitionJsonlDataset
 from recognition.option_classifier import default_option_class_names
-from recognition.training_samples import TrainingSampleWriter
+from recognition.training_samples import TrainingSampleWriter, semantic_validate_trace
 from training.inspect_dataset import inspect_task
 
 
@@ -88,7 +88,7 @@ def test_attack_speed_crop_saved_as_int_is_rejected(tmp_path):
 
     assert summary.rejected_count == 1
     row = first_row(tmp_path / "datasets" / "rejected" / "samples.jsonl")
-    assert row["rejection_reason"] == "non_option_line_saved_as_option_label"
+    assert row["rejection_reason"] == "non_option_line"
     assert not (tmp_path / "datasets" / "option_labels" / "samples.jsonl").exists()
 
 
@@ -193,6 +193,95 @@ def test_full_option_value_line_is_rejected_but_tight_value_is_saved(tmp_path):
     row = first_row(tmp_path / "good" / "datasets" / "option_values" / "samples.jsonl")
     assert row["label"] == "+9%"
     assert row["semantic_validation_status"] == "passed"
+
+
+def test_line_order_confirmation_corrects_misclassified_attack_line(tmp_path):
+    traces = [
+        RecognitionTrace(
+            "int_value_label",
+            field_type="option_label",
+            line_index=1,
+            selected_prediction="int",
+            crop_rect=Rect(20, 10, 55, 30),
+            confidence=0.9,
+            crop_metadata={"line_text": "INT +5", "parsed_option_key": "int", "parsed_value_text": "+5"},
+        ),
+        RecognitionTrace(
+            "int_value",
+            field_type="option_value",
+            line_index=1,
+            selected_prediction="+5",
+            crop_rect=Rect(60, 10, 80, 30),
+            confidence=0.9,
+            crop_metadata={"line_text": "INT +5", "parsed_option_key": "int", "parsed_value_text": "+5"},
+        ),
+        RecognitionTrace(
+            "int_value_label",
+            field_type="option_label",
+            line_index=2,
+            selected_prediction="int",
+            crop_rect=Rect(20, 35, 70, 55),
+            confidence=0.86,
+            crop_metadata={"line_text": "INT -71", "parsed_option_key": "int", "parsed_value_text": "-71"},
+        ),
+        RecognitionTrace(
+            "int_value",
+            field_type="option_value",
+            line_index=2,
+            selected_prediction="-71",
+            crop_rect=Rect(80, 35, 120, 55),
+            confidence=0.86,
+            crop_metadata={"line_text": "INT -71", "parsed_option_key": "int", "parsed_value_text": "-71"},
+        ),
+    ]
+    analysis = make_analysis(tmp_path, traces)
+    values = analysis.editable_values()
+    values["equipment_options"] = "INT +5\n공격력 +71"
+
+    summary = TrainingSampleWriter(VisionConfig(training_dataset_dir=tmp_path / "datasets")).save_confirmed_samples(
+        analysis,
+        values,
+    )
+
+    assert summary.option_label_count == 2
+    assert summary.option_value_count == 2
+    label_rows = [
+        json.loads(line)
+        for line in (tmp_path / "datasets" / "option_labels" / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    value_rows = [
+        json.loads(line)
+        for line in (tmp_path / "datasets" / "option_values" / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    attack_label = next(row for row in label_rows if row["label"] == "attack")
+    attack_value = next(row for row in value_rows if row["label"] == "+71")
+    assert attack_label["line_order_corrected"] is True
+    assert attack_label["original_parsed_option_key"] == "int"
+    assert attack_value["line_order_corrected"] is True
+    assert attack_value["original_parsed_value_text"] == "-71"
+
+
+def test_semantic_validation_rejects_label_delimiters_and_sign_only_values():
+    label_trace = RecognitionTrace(
+        "int_value_label",
+        field_type="option_label",
+        selected_prediction="int",
+        crop_metadata={"line_text": "INT : +9%", "parsed_option_key": "int", "contains_colon_like_text": True},
+    )
+    assert semantic_validate_trace(label_trace, "option_label", "int").reason == "option_label_contains_value"
+
+    value_trace = RecognitionTrace(
+        "attack",
+        field_type="option_value",
+        selected_prediction="+",
+        crop_metadata={
+            "line_text": "ATTACK : +",
+            "parsed_option_key": "attack",
+            "parsed_value_text": "+",
+            "value_sign_without_digit": True,
+        },
+    )
+    assert semantic_validate_trace(value_trace, "option_value", "+").reason == "semantic_label_mismatch"
 
 
 def test_default_dataset_loader_requires_approved_even_for_human_confirmed(tmp_path):
