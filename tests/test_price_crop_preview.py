@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from maple_price_tool.domain import AnalysisResult, FieldResult, RecognitionTrace, Rect
-from maple_price_tool.ui import crop_row_title, label_value_crop_rows
+from maple_price_tool.ui import crop_row_detail, crop_row_title, label_value_crop_rows
 
 
 def test_price_crop_preview_row_uses_tight_crop_artifacts(tmp_path):
@@ -50,3 +50,47 @@ def test_price_crop_preview_row_uses_tight_crop_artifacts(tmp_path):
     assert row["value_crop_rect"] == Rect(20, 10, 100, 30)
     assert row["price_tight_crop_path"].endswith("price_tight_crop.png")
     assert "value split failed" not in crop_row_title(row)
+
+
+def test_rejected_price_preview_does_not_show_raw_prediction_as_value(tmp_path):
+    analysis = AnalysisResult(
+        item_key="98 / wand",
+        req_level=FieldResult(98, 0.9),
+        equipment_type=FieldResult("wand", 0.9),
+        price_meso=FieldResult(None, 0.59, "111111111"),
+        str_value=FieldResult(0, 0.0),
+        dex_value=FieldResult(0, 0.0),
+        int_value=FieldResult(0, 0.0),
+        luk_value=FieldResult(0, 0.0),
+        attack=FieldResult(0, 0.0),
+        magic_attack=FieldResult(0, 0.0),
+        upgrade_count=FieldResult(0, 0.0),
+        black_crystal=FieldResult("", 0.0),
+        equipment_options=FieldResult("", 0.0),
+        potential=FieldResult("", 0.0),
+        image_path=tmp_path / "after.png",
+        captured_at=datetime.now(),
+        traces=[
+            RecognitionTrace(
+                "price_meso",
+                field_type="rejected",
+                raw_prediction="111111111",
+                selected_prediction=None,
+                crop_rect=Rect(20, 10, 100, 30),
+                crop_metadata={
+                    "line_type": "price",
+                    "crop_source": "price_tight_crop",
+                    "rejection_reason": "price_tight_crop_value_mismatch",
+                    "price_search_rect": {"left": 0, "top": 0, "right": 160, "bottom": 40},
+                    "price_tight_rect": {"left": 20, "top": 10, "right": 100, "bottom": 30},
+                },
+            )
+        ],
+    )
+
+    row = label_value_crop_rows(analysis)[0]
+
+    assert row["value"] == ""
+    assert row["raw_prediction"] == "111111111"
+    assert "value=-" in crop_row_title(row)
+    assert "raw=111111111" in crop_row_detail(row)

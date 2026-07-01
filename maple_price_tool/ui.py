@@ -1157,6 +1157,10 @@ def display_label_for_trace(trace) -> str:
 
 def display_value_for_trace(trace) -> str:
     metadata = trace.crop_metadata or {}
+    if metadata.get("line_type") == "price" or trace.field_name == "price_meso":
+        if trace.field_type == "rejected" or metadata.get("rejection_reason"):
+            return str(trace.selected_prediction or "")
+        return str(trace.selected_prediction or metadata.get("parsed_value_text") or "")
     return str(
         metadata.get("confirmed_value_text")
         or metadata.get("parsed_value_text")
