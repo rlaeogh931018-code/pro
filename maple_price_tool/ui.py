@@ -34,7 +34,7 @@ from .domain import AnalysisResult, AppState, CaptureResult, Rect
 from .identity import capture_pair_id_from_path, parse_sidecar, session_id_from_pair_id, sidecar_payload
 from .storage import Storage, final_record_from_analysis
 from .vision import OpenCvTemplateRecognizer
-from recognition.training_samples import TrainingSampleWriter, apply_line_order_confirmations
+from recognition.training_samples import SampleSaveSummary, TrainingSampleWriter, apply_line_order_confirmations
 
 try:
     from pynput import keyboard
@@ -452,15 +452,7 @@ class ReviewWindow(QMainWindow):
             f"options={analysis.equipment_options.confidence:.2f}, "
             f"potential={analysis.potential.confidence:.2f}"
         )
-        option_label_crops = sum(1 for trace in analysis.traces if trace.field_type == "option_label" and trace.crop_rect is not None)
-        option_value_crops = sum(1 for trace in analysis.traces if trace.field_type == "option_value" and trace.crop_rect is not None)
-        price_crops = sum(1 for trace in analysis.traces if trace.field_type == "price" and trace.crop_rect is not None)
-        reasons = ", ".join(sorted({trace.selection_reason for trace in analysis.traces if trace.selection_reason})) or "template_only"
-        needs_review = [trace.field_name for trace in analysis.traces if trace.needs_review]
-        self.training_label.setText(
-            f"crops: labels={option_label_crops}, values={option_value_crops}, prices={price_crops} / "
-            f"methods={reasons} / needs_review={', '.join(needs_review) if needs_review else 'none'}"
-        )
+        self.training_label.setText(format_crop_preview_summary(build_crop_preview_summary(analysis)))
         self.label_value_preview.setPlainText(format_label_value_preview(analysis))
         self.populate_crop_preview(analysis)
         self.image_label.setText(f"image: {analysis.image_path}")
@@ -527,10 +519,16 @@ class ReviewWindow(QMainWindow):
         title.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(title)
         crop_row = QHBoxLayout()
-        crop_row.addWidget(crop_image_label(source, row.get("label_trace"), "label crop"))
-        crop_row.addWidget(crop_image_label(source, row.get("value_trace"), "value crop"))
+        crop_row.addWidget(labeled_crop_widget("raw", crop_image_rect(source, row.get("raw_line_rect"), crop_fallback_text("raw"))))
+        crop_row.addWidget(labeled_crop_widget("label", crop_image_rect(source, row.get("label_crop_rect"), crop_fallback_text("label"))))
+        crop_row.addWidget(labeled_crop_widget("value", crop_image_rect(source, row.get("value_crop_rect"), crop_fallback_text("value"))))
+        crop_row.addWidget(labeled_crop_widget("model", crop_image_label(source, row.get("model_trace"), crop_fallback_text("model"))))
         layout.addLayout(crop_row)
-        widget.setStyleSheet("QWidget { border-bottom: 1px solid #d0d0d0; } QLabel { border: 0; }")
+        detail = QLabel(crop_row_detail(row))
+        detail.setWordWrap(True)
+        detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(detail)
+        widget.setStyleSheet(crop_row_style(row))
         return widget
 
     def show_diff_preview_for_capture(self, image_path: Path) -> None:
@@ -605,13 +603,7 @@ class ReviewWindow(QMainWindow):
         if self.config.vision.save_training_samples:
             try:
                 summary = TrainingSampleWriter(self.config.vision).save_confirmed_samples(self.analysis, values)
-                sample_message = (
-                    f"; db saved, training samples saved={summary.saved_count}"
-                    f" labels={summary.option_label_count}"
-                    f" values={summary.option_value_count}"
-                    f" prices={summary.price_count}"
-                    f" rejected={summary.rejected_count}"
-                )
+                sample_message = "; db saved, " + format_sample_save_summary(summary)
                 if summary.skipped_count:
                     reasons = ", ".join(sorted(set(summary.skipped_reasons))) or "unknown"
                     sample_message += f" skipped={summary.skipped_count} ({reasons})"
@@ -726,10 +718,12 @@ def format_label_value_preview(analysis: AnalysisResult) -> str:
         prefix = f"line {row['line_index']}" if row["line_index"] is not None else str(row.get("sort_key", "trace"))
         label = row["label"] or "-"
         value = row["value"] or "-"
+        line_type = f" / type={row['line_type']}" if row.get("line_type") else ""
+        field = f" / field={row['field_name']}" if row.get("field_name") else ""
         text = f" / text={row['line_text']}" if row["line_text"] else ""
         reason = f" / reason={row['reason']}" if row["reason"] else ""
         notes = f" / {'; '.join(dict.fromkeys(row['notes']))}" if row["notes"] else ""
-        lines.append(f"{prefix}: label={label} / value={value} / status={row['status']}{text}{reason}{notes}")
+        lines.append(f"{prefix}: label={label} / value={value} / status={row['status']}{line_type}{field}{text}{reason}{notes}")
     return "\n".join(lines)
 
 
@@ -738,7 +732,7 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
     apply_line_order_confirmations(traces, analysis.editable_values())
     rows: dict[object, dict[str, object]] = {}
     for trace in traces:
-        if trace.field_type not in {"item_metadata", "option_label", "option_value", "rejected", "ui_label", "ui_value"}:
+        if trace.field_type not in {"item_metadata", "option_label", "option_value", "price", "rejected", "ignored", "ui_label", "ui_value"}:
             continue
         key = crop_row_key(trace)
         row = rows.setdefault(
@@ -750,11 +744,24 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
                 "label": "",
                 "value": "",
                 "field_name": "",
+                "line_type": "",
+                "parsed_key": "",
+                "parsed_value": "",
+                "raw_prediction": "",
+                "selected_prediction": "",
+                "confidence": 0.0,
+                "semantic_validation_status": "",
+                "semantic_validation_reason": "",
+                "review_status": "unreviewed",
                 "status": "ok",
                 "reason": "",
                 "notes": [],
+                "raw_line_rect": None,
+                "label_crop_rect": None,
+                "value_crop_rect": None,
                 "label_trace": None,
                 "value_trace": None,
+                "model_trace": None,
             },
         )
         metadata = trace.crop_metadata or {}
@@ -763,8 +770,35 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
             row["line_text"] = line_text
         if not row["field_name"]:
             row["field_name"] = trace.field_name
+        if not row["line_type"]:
+            row["line_type"] = str(metadata.get("line_type") or line_type_for_trace(trace))
+        if not row["parsed_key"]:
+            row["parsed_key"] = str(metadata.get("metadata_key") or metadata.get("parsed_option_key") or "")
+        if not row["parsed_value"]:
+            row["parsed_value"] = str(metadata.get("parsed_value_text") or trace.selected_prediction or "")
+        if not row["raw_prediction"]:
+            row["raw_prediction"] = str(trace.raw_prediction or "")
+        if not row["selected_prediction"]:
+            row["selected_prediction"] = str(trace.selected_prediction or "")
+        if trace.confidence and float(trace.confidence) > float(row["confidence"]):
+            row["confidence"] = float(trace.confidence)
+        if not row["semantic_validation_status"]:
+            row["semantic_validation_status"] = str(metadata.get("semantic_validation_status") or "")
+        if not row["semantic_validation_reason"]:
+            row["semantic_validation_reason"] = str(metadata.get("semantic_validation_reason") or "")
+        if metadata.get("review_status"):
+            row["review_status"] = str(metadata.get("review_status"))
+        if row["raw_line_rect"] is None:
+            row["raw_line_rect"] = rect_from_metadata(metadata.get("raw_line_rect"))
+        if row["label_crop_rect"] is None:
+            row["label_crop_rect"] = rect_from_metadata(metadata.get("label_crop_rect") or metadata.get("trimmed_label_rect"))
+        if row["value_crop_rect"] is None:
+            row["value_crop_rect"] = rect_from_metadata(metadata.get("value_crop_rect") or metadata.get("raw_value_rect"))
         reason = str(metadata.get("rejection_reason") or "")
-        if trace.field_type == "rejected" or reason:
+        if trace.field_type == "ignored" or row["line_type"] == "ignored":
+            row["status"] = "ignored"
+            row["reason"] = reason or str(metadata.get("ignored_reason") or trace.selection_reason or "ignored")
+        elif trace.field_type == "rejected" or reason:
             row["status"] = "rejected"
             row["reason"] = reason or "rejected"
         elif trace.needs_review and row["status"] != "rejected":
@@ -783,18 +817,29 @@ def label_value_crop_rows(analysis: AnalysisResult) -> list[dict[str, object]]:
             row["label"] = str(metadata.get("metadata_key") or trace.field_name)
             row["value"] = display_value_for_trace(trace)
             row["value_trace"] = trace
+            row["model_trace"] = trace
         elif trace.field_name.endswith("_label") or trace.field_type in {"option_label", "ui_label"}:
             row["label"] = display_label_for_trace(trace)
             row["label_trace"] = trace
+            if row["model_trace"] is None:
+                row["model_trace"] = trace
         elif trace.field_type in {"option_value", "ui_value"} or trace.field_type == "rejected":
             row["value"] = display_value_for_trace(trace)
             row["value_trace"] = trace
+            row["model_trace"] = trace
+        elif trace.field_type == "price":
+            row["label"] = "price"
+            row["value"] = display_value_for_trace(trace)
+            row["value_trace"] = trace
+            row["model_trace"] = trace
     return [rows[key] for key in sorted(rows, key=sort_preview_row_key)]
 
 
 def crop_row_key(trace) -> object:
     if trace.field_type == "item_metadata":
         return f"metadata:{trace.crop_metadata.get('metadata_key') or trace.field_name}"
+    if trace.field_type == "price":
+        return "price"
     if trace.field_name in {"req_level", "req_level_label"}:
         return "req_level"
     return trace.line_index if trace.line_index is not None else trace.field_name
@@ -806,16 +851,85 @@ def crop_row_title(row: dict[str, object]) -> str:
     value = row.get("value") or "-"
     status = row.get("status") or "ok"
     reason = f" / {row['reason']}" if row.get("reason") else ""
-    return f"{prefix}  label={label}  value={value}  {status}{reason}"
+    line_type = row.get("line_type") or "-"
+    field_name = row.get("field_name") or "-"
+    validation = row.get("semantic_validation_status") or row.get("review_status") or ""
+    validation_text = f" / validation={validation}" if validation else ""
+    return f"{prefix}  {line_type} / {field_name}  label={label}  value={value}  {status}{validation_text}{reason}"
+
+
+def crop_row_detail(row: dict[str, object]) -> str:
+    parts = [
+        f"parsed_key={row.get('parsed_key') or '-'}",
+        f"parsed_value={row.get('parsed_value') or '-'}",
+        f"raw={row.get('raw_prediction') or '-'}",
+        f"selected={row.get('selected_prediction') or '-'}",
+        f"confidence={float(row.get('confidence') or 0.0):.2f}",
+        f"review={row.get('review_status') or 'unreviewed'}",
+    ]
+    if row.get("semantic_validation_status"):
+        parts.append(f"validation={row.get('semantic_validation_status')}")
+    if row.get("semantic_validation_reason"):
+        parts.append(f"validation_reason={row.get('semantic_validation_reason')}")
+    if row.get("reason"):
+        parts.append(f"reason={row.get('reason')}")
+    if row.get("line_text"):
+        parts.append(f"text={row.get('line_text')}")
+    return " / ".join(parts)
+
+
+def crop_row_style(row: dict[str, object]) -> str:
+    status = str(row.get("status") or "")
+    reason = str(row.get("reason") or row.get("semantic_validation_reason") or "")
+    review_status = str(row.get("review_status") or "")
+    if status == "rejected" or "failed" in str(row.get("semantic_validation_status") or ""):
+        background = "#fff0f0"
+        border = "#d43f3a"
+    elif status == "ignored":
+        background = "#f3f4f6"
+        border = "#9aa5b1"
+    elif "split_uncertain" in reason:
+        background = "#fff7e6"
+        border = "#d9822b"
+    elif review_status in {"unreviewed", "pending_review"} or status == "review":
+        background = "#fffbe6"
+        border = "#d9b600"
+    else:
+        background = "#ffffff"
+        border = "#d0d0d0"
+    return f"QWidget {{ background: {background}; border-bottom: 1px solid {border}; }} QLabel {{ border: 0; }}"
+
+
+def labeled_crop_widget(title: str, image_label: QLabel) -> QWidget:
+    widget = QWidget()
+    layout = QVBoxLayout(widget)
+    layout.setContentsMargins(0, 0, 0, 0)
+    caption = QLabel(title)
+    caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    layout.addWidget(caption)
+    layout.addWidget(image_label)
+    return widget
+
+
+def crop_fallback_text(slot: str) -> str:
+    return {
+        "raw": "raw line crop: not saved",
+        "label": "label crop: not available",
+        "value": "value crop: split failed",
+        "model": "model crop: not generated",
+    }.get(slot, "crop: not available")
 
 
 def crop_image_label(source: QPixmap, trace: object, fallback: str) -> QLabel:
+    return crop_image_rect(source, getattr(trace, "crop_rect", None), fallback)
+
+
+def crop_image_rect(source: QPixmap, rect: Rect | None, fallback: str) -> QLabel:
     label = QLabel()
     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     label.setMinimumSize(CROP_THUMB_MAX)
     label.setStyleSheet("QLabel { background: #111; color: #ddd; border: 1px solid #777; }")
-    rect = getattr(trace, "crop_rect", None)
-    if trace is None or rect is None or rect.width <= 0 or rect.height <= 0:
+    if rect is None or rect.width <= 0 or rect.height <= 0:
         label.setText(fallback)
         return label
     crop = source.copy(rect.left, rect.top, rect.width, rect.height)
@@ -825,6 +939,85 @@ def crop_image_label(source: QPixmap, trace: object, fallback: str) -> QLabel:
     scaled = crop.scaled(CROP_THUMB_MAX, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
     label.setPixmap(scaled)
     return label
+
+
+def rect_from_metadata(value: object) -> Rect | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        return Rect(int(value["left"]), int(value["top"]), int(value["right"]), int(value["bottom"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def line_type_for_trace(trace) -> str:
+    if trace.field_type == "item_metadata":
+        key = (trace.crop_metadata or {}).get("metadata_key") or trace.field_name
+        return "metadata_req_level" if key == "req_level" else "metadata_equipment_category"
+    if trace.field_type == "option_label" or trace.field_type == "option_value":
+        return "potential_option" if str(trace.field_name).startswith("potential_") else "base_option"
+    if trace.field_type == "price":
+        return "price"
+    if trace.field_type == "rejected":
+        return str((trace.crop_metadata or {}).get("line_type") or "rejected")
+    if trace.field_type == "ignored":
+        return "ignored"
+    return str(trace.field_type or "")
+
+
+def build_crop_preview_summary(analysis: AnalysisResult) -> dict[str, int]:
+    summary = {
+        "item_metadata": 0,
+        "option_label": 0,
+        "option_value": 0,
+        "price": 0,
+        "ignored": 0,
+        "rejected": 0,
+        "split_uncertain": 0,
+    }
+    seen: set[tuple[str, object]] = set()
+    for trace in analysis.traces:
+        metadata = trace.crop_metadata or {}
+        reason = str(metadata.get("rejection_reason") or trace.selection_reason or "")
+        if "split_uncertain" in reason or "split_uncertain" in str(metadata.get("semantic_validation_reason") or ""):
+            summary["split_uncertain"] += 1
+        if trace.field_type == "ignored" or metadata.get("line_type") == "ignored":
+            summary["ignored"] += 1
+            continue
+        if trace.field_type == "rejected" or metadata.get("rejection_reason"):
+            summary["rejected"] += 1
+            continue
+        if trace.field_type in {"item_metadata", "option_label", "option_value", "price"} and trace.crop_rect is not None:
+            key = (trace.field_type, trace.field_name, trace.line_index)
+            if key in seen:
+                continue
+            seen.add(key)
+            summary[trace.field_type] += 1
+    return summary
+
+
+def format_crop_preview_summary(summary: dict[str, int]) -> str:
+    return (
+        "Training sample preview: "
+        f"item_metadata={summary.get('item_metadata', 0)}, "
+        f"option_label={summary.get('option_label', 0)}, "
+        f"option_value={summary.get('option_value', 0)}, "
+        f"price={summary.get('price', 0)}, "
+        f"ignored={summary.get('ignored', 0)}, "
+        f"rejected={summary.get('rejected', 0)}, "
+        f"split_uncertain={summary.get('split_uncertain', 0)}"
+    )
+
+
+def format_sample_save_summary(summary: SampleSaveSummary) -> str:
+    return (
+        "training samples: "
+        f"item_metadata saved={summary.item_metadata_count}, "
+        f"option_label saved={summary.option_label_count}, "
+        f"option_value saved={summary.option_value_count}, "
+        f"price saved={summary.price_count}, "
+        f"rejected={summary.rejected_count}"
+    )
 
 
 def display_label_for_trace(trace) -> str:
